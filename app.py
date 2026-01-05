@@ -1,172 +1,142 @@
-import os, requests, urllib3
+import os
+import requests
 from flask import Flask, render_template_string, request, session, jsonify, redirect, url_for
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
+# =========================
+# CONFIG APP
+# =========================
 app = Flask(__name__)
-app.secret_key = "nanas_ultra_secret_2026"
 
-# Configuration
+# Mets ceci en variable d'env sur Render (RECOMMANDÉ)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "nanas_ultra_secret_2026")
+
+TZ = ZoneInfo("Europe/Luxembourg")
+
+# =========================
+# CONFIG AIRTABLE
+# =========================
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-AIRTABLE_TABLE_NAME = "Table 1"
-IGLOO_CLIENT_ID = "xprluqseolemaoc3l3hu9d2zlt"
-IGLOO_CLIENT_SECRET = os.getenv("IGLOO_CLIENT_SECRET")
-ADMIN_PASSWORD = "TON_MOT_DE_PASSE_PERSO" # À changer
+AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME", "Table 1")
+
+# =========================
+# CONFIG IGLOO
+# =========================
+IGLOO_CLIENT_ID = os.getenv("IGLOO_CLIENT_ID", "xprluqseolemaoc3l3hu9d2zlt")
+IGLOO_CLIENT_SECRET = os.getenv("IGLOO_CLIENT_SECRET")  # obligatoire sur Render
+
+AUTH_URL = "https://auth.igloohome.co/oauth2/token"
+API_BASE = "https://api.igloodeveloper.co/igloohome"
+
+PIN_DURATION_HOURS = int(os.getenv("PIN_DURATION_HOURS", "4"))  # durée d'accès
+VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"  # sur Render: true
+
+# =========================
+# CONFIG ACCÈS
+# =========================
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "TON_MOT_DE_PASSE_PERSO")  # À changer
+
+# =========================
+# TOKEN CACHE (évite de retoken à chaque click)
+# =========================
+_token_cache = {
+    "access_token": None,
+    "expires_at": 0
+}
+
+
+# =========================
+# AIRTABLE HELPERS
+# =========================
+def airtable_url():
+    return f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
+
+def airtable_headers():
+    return {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
 
 def get_airtable_records(formula=""):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    if not (AIRTABLE_API_KEY and AIRTABLE_BASE_ID):
+        return []
+    url = airtable_url()
     params = {"filterByFormula": formula} if formula else {}
     try:
-        res = requests.get(url, headers=headers, params=params)
-        return res.json().get('records', [])
-    except: return []
+        res = requests.get(url, headers=airtable_headers(), params=params, timeout=20)
+        res.raise_for_status()
+        return res.json().get("records", [])
+    except Exception:
+        return []
 
-def generate_igloo_pin(lock_id):
+def update_airtable_record(record_id: str, fields: dict) -> bool:
+    """PATCH Airtable record (pour stocker VarianceHourly etc.)"""
+    if not (AIRTABLE_API_KEY and AIRTABLE_BASE_ID and record_id):
+        return False
+    url = f"{airtable_url()}/{record_id}"
     try:
-        # 1. Tentative d'obtention du Token avec une méthode alternative
-        auth_url = "https://auth.igloohome.co/oauth2/token"
-        payload_auth = {
-            "grant_type": "client_credentials",
-            "client_id": IGLOO_CLIENT_ID,
-            "client_secret": IGLOO_CLIENT_SECRET
-        }
-        
-        # On essaie d'envoyer les identifiants en direct dans le JSON
-        auth_res = requests.post(auth_url, data=payload_auth, verify=False)
-        
-        if auth_res.status_code != 200:
-            # Si ça échoue encore, on tente la méthode "Header" classique
-            auth_res = requests.post(auth_url, auth=(IGLOO_CLIENT_ID, IGLOO_CLIENT_SECRET), 
-                                     data={"grant_type": "client_credentials"}, verify=False)
+        res = requests.patch(url, headers={**airtable_headers(), "Content-Type": "application/json"},
+                             json={"fields": fields}, timeout=20)
+        return res.status_code in (200, 201)
+    except Exception:
+        return False
 
-        token = auth_res.json().get('access_token')
-        if not token:
-            return "TOKEN_FAIL"
 
-        # 2. Demande du PIN
-        pin_url = f"https://api.igloohome.co/v2/locks/{lock_id}/pins"
-        now = datetime.utcnow() + timedelta(minutes=5)
-        payload_pin = {
-            "name": "Nanas_Access",
-            "type": "duration",
-            "startDate": now.strftime('%Y-%m-%dT%H:%M:%SZ'),
-            "endDate": (now + timedelta(hours=4)).strftime('%Y-%m-%dT%H:%M:%SZ')
-        }
-        
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        r = requests.post(pin_url, json=payload_pin, headers=headers, verify=False)
-        
-        return r.json().get('pin', "ERREUR_PIN")
+# =========================
+# IGLOO HELPERS
+# =========================
+def round_up_to_next_hour(dt: datetime) -> datetime:
+    # prochaine heure pile (HH:00:00)
+    dt = dt.astimezone(TZ)
+    return dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
 
-    except Exception as e:
-        return "INDISPONIBLE"
+def iso_with_offset(dt: datetime) -> str:
+    # ex: 2026-01-05T16:00:00+01:00
+    return dt.astimezone(TZ).isoformat(timespec="seconds")
 
-# --- 1. PAGE TECH (Accès Direct QR) ---
-@app.route('/access/<qr_id>')
-def tech_access(qr_id):
-    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
-    if not res: return "QR Code Inconnu", 404
-    fields = res[0]['fields']
-    pin = generate_igloo_pin(fields.get('LockID'))
-    return render_template_string(HTML_TECH, batiment=fields.get('Batiment'), pin=pin)
+def get_oauth_token() -> str:
+    """Récupère un token OAuth avec Basic Auth (comme curl -u). Cache en mémoire."""
+    now_ts = int(datetime.now(TZ).timestamp())
+    if _token_cache["access_token"] and now_ts < (_token_cache["expires_at"] - 120):
+        return _token_cache["access_token"]
 
-# --- 2. PAGE GÉRANCE (Login Commun) ---
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        client = request.form.get('client')
-        pwd = request.form.get('pwd')
-        records = get_airtable_records(f"AND({{Client}} = '{client}', {{Password}} = '{pwd}')")
-        if records:
-            session['user'] = client
-            session['role'] = 'gerance'
-            return redirect(url_for('gerance_portal'))
-        return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
-    return render_template_string(HTML_LOGIN)
+    if not IGLOO_CLIENT_SECRET:
+        raise RuntimeError("IGLOO_CLIENT_SECRET manquant (variable d'environnement).")
 
-@app.route('/gerance')
-def gerance_portal():
-    if session.get('role') != 'gerance': return redirect(url_for('login'))
-    records = get_airtable_records(f"{{Client}} = '{session['user']}'")
-    return render_template_string(HTML_PORTAL, title="Portail Gérance", records=records)
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept": "application/json",
+        # parfois utile :
+        "User-Agent": "curl/8.0"
+    }
 
-# --- 3. PAGE FULL ADMIN (Toi) ---
-@app.route('/admin', methods=['GET', 'POST'])
-def admin():
-    if request.method == 'POST':
-        if request.form.get('pwd') == ADMIN_PASSWORD:
-            session['role'] = 'admin'
-        else: return "Accès refusé"
-    
-    if session.get('role') != 'admin':
-        return '<form method="post">Pass Admin: <input type="password" name="pwd"><button>OK</button></form>'
-    
-    records = get_airtable_records() # On prend TOUT
-    return render_template_string(HTML_PORTAL, title="FULL ADMIN", records=records)
+    # EXACTEMENT comme curl: grant_type=client_credentials
+    data = "grant_type=client_credentials"
 
-# --- API PIN ---
-@app.route('/api/get_pin/<qr_id>')
-def api_pin(qr_id):
-    if not session.get('role'): return jsonify({"pin": "Non autorisé"})
-    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
-    pin = generate_igloo_pin(res[0]['fields'].get('LockID'))
-    return jsonify({"pin": pin})
+    r = requests.post(
+        AUTH_URL,
+        auth=(IGLOO_CLIENT_ID.strip(), IGLOO_CLIENT_SECRET.strip()),
+        headers=headers,
+        data=data,
+        verify=VERIFY_SSL,
+        timeout=20,
+    )
 
-# --- TEMPLATES ---
-HTML_LOGIN = """
-<body style="font-family:sans-serif; background:#f4f7f9; display:flex; justify-content:center; padding-top:100px;">
-    <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); width:350px; text-align:center;">
-        <h2 style="color:#2563eb;">Connexion Gérance</h2>
-        <form method="post">
-            <input type="text" name="client" placeholder="Nom Gérance" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
-            <input type="password" name="pwd" placeholder="Mot de passe" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
-            <button style="width:100%; padding:12px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Entrer</button>
-        </form>
-        {% if error %}<p style="color:red;">{{error}}</p>{% endif %}
-    </div>
-</body>
-"""
+    # Si erreur, on remonte un message clair
+    if r.status_code != 200:
+        raise RuntimeError(f"OAuth failed {r.status_code}: {r.text}")
 
-HTML_PORTAL = """
-<body style="font-family:sans-serif; background:#f4f7f9; padding:20px;">
-    <div style="max-width:500px; margin:auto; background:white; padding:30px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); text-align:center;">
-        <h2 style="color:#2563eb;">{{title}}</h2>
-        <select id="sel" style="width:100%; padding:12px; margin:20px 0; border-radius:8px; border:1px solid #ddd;">
-            <option value="">-- Choisir un bâtiment --</option>
-            {% for r in records %}
-            <option value="{{r['fields']['QRID']}}">{{r['fields']['Batiment']}} ({{r['fields']['Client']}})</option>
-            {% endfor %}
-        </select>
-        <button onclick="getPin()" style="width:100%; padding:15px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">GÉNÉRER CODE</button>
-        <div id="pin" style="font-size:50px; font-weight:bold; margin:20px 0; color:#1e293b;">----</div>
-    </div>
-    <script>
-        function getPin(){
-            const id = document.getElementById('sel').value;
-            if(!id) return;
-            document.getElementById('pin').innerText = "...";
-            fetch('/api/get_pin/'+id).then(r=>r.json()).then(d=>{ document.getElementById('pin').innerText = d.pin; });
-        }
-    </script>
-</body>
-"""
+    j = r.json()
+    token = j.get("access_token")
+    expires_in = int(j.get("expires_in", 3600))
 
-HTML_TECH = """
-<body style="font-family:sans-serif; background:#1e293b; color:white; display:flex; justify-content:center; align-items:center; height:100vh; margin:0;">
-    <div style="text-align:center; padding:20px;">
-        <h2 style="color:#60a5fa;">ACCÈS TECHNIQUE</h2>
-        <p>{{batiment}}</p>
-        <div style="font-size:70px; font-weight:bold; background:white; color:#1e293b; padding:20px; border-radius:15px; margin:20px 0; letter-spacing:5px;">
-            {{pin}}
-        </div>
-        <p style="font-size:12px; opacity:0.7;">Code valable 4 heures. Appuyez sur 'Unlocked' après avoir tapé le code.</p>
-    </div>
-</body>
-"""
+    if not token:
+        raise RuntimeError(f"OAuth token missing: {r.text}")
 
-if __name__ == '__main__':
-    app.run()
+    _token_cache["access_token"] = token
+    _token_cache["expires_at"] = now_ts + expires_in
+    return token
 
+def choose_variance_hourly(fields: dict) -> int:
+    """
+    Hourly variance: 1..3
+    Si Airtable a un champ 'VarianceHourly', on l'utilise et on tour
