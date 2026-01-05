@@ -1,134 +1,145 @@
-from flask import Flask, render_template_string, request, session, jsonify
 import os, requests, urllib3
+from flask import Flask, render_template_string, request, session, jsonify, redirect, url_for
 from datetime import datetime, timedelta
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-app = Flask(__name__)
-app.secret_key = "cle_secrete_nanas_2026"
 
-# Config
+app = Flask(__name__)
+app.secret_key = "nanas_ultra_secret_2026"
+
+# Configuration
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = "Table 1"
 IGLOO_CLIENT_ID = "xprluqseolemaoc3l3hu9d2zlt"
 IGLOO_CLIENT_SECRET = os.getenv("IGLOO_CLIENT_SECRET")
+ADMIN_PASSWORD = "TON_MOT_DE_PASSE_PERSO" # À changer
 
-def get_airtable_records(filter_formula):
+def get_airtable_records(formula=""):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    params = {"filterByFormula": filter_formula}
-    res = requests.get(url, headers=headers, params=params)
-    return res.json().get('records', [])
+    params = {"filterByFormula": formula} if formula else {}
+    try:
+        res = requests.get(url, headers=headers, params=params)
+        return res.json().get('records', [])
+    except: return []
 
-@app.route('/portal/<client_name>', methods=['GET', 'POST'])
-def portal(client_name):
-    # 1. Récupérer les infos du client
-    records = get_airtable_records(f"{{Client}} = '{client_name}'")
-    if not records: return "Client inconnu", 404
-    
-    # 2. Gérer la connexion
-    expected_pwd = records[0]['fields'].get('Password')
-    if request.method == 'POST' and 'pwd' in request.form:
-        if request.form.get('pwd') == expected_pwd:
-            session[f'auth_{client_name}'] = True
-        else:
-            return render_template_string(HTML_LAYOUT, content=HTML_LOGIN, client=client_name, error="Mauvais mot de passe")
-
-    if not session.get(f'auth_{client_name}'):
-        return render_template_string(HTML_LAYOUT, content=HTML_LOGIN, client=client_name)
-
-    # 3. Afficher le menu déroulant
-    return render_template_string(HTML_LAYOUT, content=HTML_SELECTOR, client=client_name, records=records)
-
-# Route API pour générer le PIN sans recharger la page
-@app.route('/get_pin/<qr_id>')
-def api_get_pin(qr_id):
-    # On vérifie d'abord l'ID dans Airtable pour avoir le LockID
-    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
-    if not res: return jsonify({"pin": "Erreur ID"})
-    
-    lock_id = res[0]['fields'].get('LockID')
-    
-    # Appel Igloohome (On réutilise ta logique avec verify=False)
+def generate_igloo_pin(lock_id):
     try:
         auth = requests.post("https://auth.igloohome.co/oauth2/token",
                              auth=(IGLOO_CLIENT_ID, IGLOO_CLIENT_SECRET),
                              data={"grant_type": "client_credentials"}, verify=False).json()
         token = auth.get('access_token')
-        
         now = datetime.utcnow() + timedelta(minutes=2)
-        payload = {"name": "Portal_Access", "type": "duration",
-                   "startDate": now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        payload = {"name": "Nanas_Access", "type": "duration", 
+                   "startDate": now.strftime('%Y-%m-%dT%H:%M:%SZ'), 
                    "endDate": (now + timedelta(hours=4)).strftime('%Y-%m-%dT%H:%M:%SZ')}
-        
-        pin_res = requests.post(f"https://api.igloohome.co/v2/locks/{lock_id}/pins", 
-                                json=payload, headers={"Authorization": f"Bearer {token}"}, verify=False).json()
-        return jsonify({"pin": pin_res.get('pin', "Erreur Serveur")})
-    except:
-        return jsonify({"pin": "Indisponible"})
+        r = requests.post(f"https://api.igloohome.co/v2/locks/{lock_id}/pins", 
+                          json=payload, headers={"Authorization": f"Bearer {token}"}, verify=False).json()
+        return r.get('pin', "Erreur")
+    except: return "Indisponible"
 
-# --- DESIGN ---
+# --- 1. PAGE TECH (Accès Direct QR) ---
+@app.route('/access/<qr_id>')
+def tech_access(qr_id):
+    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
+    if not res: return "QR Code Inconnu", 404
+    fields = res[0]['fields']
+    pin = generate_igloo_pin(fields.get('LockID'))
+    return render_template_string(HTML_TECH, batiment=fields.get('Batiment'), pin=pin)
 
-HTML_LAYOUT = """
-<!DOCTYPE html>
-<html>
-<head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <style>
-        body { font-family: sans-serif; background: #f4f7f6; display: flex; justify-content: center; padding-top: 50px; }
-        .card { background: white; width: 90%; max-width: 400px; padding: 30px; border-radius: 20px; box-shadow: 0 10px 20px rgba(0,0,0,0.05); text-align: center; }
-        select, input { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #ddd; box-sizing: border-box; font-size: 16px; }
-        button { width: 100%; padding: 12px; border-radius: 8px; border: none; background: #1a73e8; color: white; font-weight: bold; cursor: pointer; }
-        #pin_display { font-size: 40px; font-weight: bold; color: #1a73e8; margin-top: 20px; letter-spacing: 4px; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h2 style="color:#333;">NANAS PORTAL</h2>
-        {{content | safe}}
+# --- 2. PAGE GÉRANCE (Login Commun) ---
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        client = request.form.get('client')
+        pwd = request.form.get('pwd')
+        records = get_airtable_records(f"AND({{Client}} = '{client}', {{Password}} = '{pwd}')")
+        if records:
+            session['user'] = client
+            session['role'] = 'gerance'
+            return redirect(url_for('gerance_portal'))
+        return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
+    return render_template_string(HTML_LOGIN)
+
+@app.route('/gerance')
+def gerance_portal():
+    if session.get('role') != 'gerance': return redirect(url_for('login'))
+    records = get_airtable_records(f"{{Client}} = '{session['user']}'")
+    return render_template_string(HTML_PORTAL, title="Portail Gérance", records=records)
+
+# --- 3. PAGE FULL ADMIN (Toi) ---
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    if request.method == 'POST':
+        if request.form.get('pwd') == ADMIN_PASSWORD:
+            session['role'] = 'admin'
+        else: return "Accès refusé"
+    
+    if session.get('role') != 'admin':
+        return '<form method="post">Pass Admin: <input type="password" name="pwd"><button>OK</button></form>'
+    
+    records = get_airtable_records() # On prend TOUT
+    return render_template_string(HTML_PORTAL, title="FULL ADMIN", records=records)
+
+# --- API PIN ---
+@app.route('/api/get_pin/<qr_id>')
+def api_pin(qr_id):
+    if not session.get('role'): return jsonify({"pin": "Non autorisé"})
+    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
+    pin = generate_igloo_pin(res[0]['fields'].get('LockID'))
+    return jsonify({"pin": pin})
+
+# --- TEMPLATES ---
+HTML_LOGIN = """
+<body style="font-family:sans-serif; background:#f4f7f9; display:flex; justify-content:center; padding-top:100px;">
+    <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); width:350px; text-align:center;">
+        <h2 style="color:#2563eb;">Connexion Gérance</h2>
+        <form method="post">
+            <input type="text" name="client" placeholder="Nom Gérance" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
+            <input type="password" name="pwd" placeholder="Mot de passe" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
+            <button style="width:100%; padding:12px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Entrer</button>
+        </form>
+        {% if error %}<p style="color:red;">{{error}}</p>{% endif %}
     </div>
 </body>
-</html>
 """
 
-HTML_LOGIN = """
-<p>Client : <strong>{{client}}</strong></p>
-<form method="post">
-    <input type="password" name="pwd" placeholder="Mot de passe" required>
-    <button type="submit">Se connecter</button>
-</form>
-{% if error %}<p style="color:red;">{{error}}</p>{% endif %}
+HTML_PORTAL = """
+<body style="font-family:sans-serif; background:#f4f7f9; padding:20px;">
+    <div style="max-width:500px; margin:auto; background:white; padding:30px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); text-align:center;">
+        <h2 style="color:#2563eb;">{{title}}</h2>
+        <select id="sel" style="width:100%; padding:12px; margin:20px 0; border-radius:8px; border:1px solid #ddd;">
+            <option value="">-- Choisir un bâtiment --</option>
+            {% for r in records %}
+            <option value="{{r['fields']['QRID']}}">{{r['fields']['Batiment']}} ({{r['fields']['Client']}})</option>
+            {% endfor %}
+        </select>
+        <button onclick="getPin()" style="width:100%; padding:15px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">GÉNÉRER CODE</button>
+        <div id="pin" style="font-size:50px; font-weight:bold; margin:20px 0; color:#1e293b;">----</div>
+    </div>
+    <script>
+        function getPin(){
+            const id = document.getElementById('sel').value;
+            if(!id) return;
+            document.getElementById('pin').innerText = "...";
+            fetch('/api/get_pin/'+id).then(r=>r.json()).then(d=>{ document.getElementById('pin').innerText = d.pin; });
+        }
+    </script>
+</body>
 """
 
-HTML_SELECTOR = """
-<p>Bienvenue, <strong>{{client}}</strong></p>
-<label>Sélectionnez un bâtiment :</label>
-<select id="lock_select">
-    <option value="">-- Choisir --</option>
-    {% for r in records %}
-    <option value="{{r['fields']['QRID']}}">{{r['fields']['Batiment']}}</option>
-    {% endfor %}
-</select>
-<button onclick="generatePIN()">Générer le code</button>
-<div id="pin_display">----</div>
-<p id="status" style="font-size:12px; color:#666;"></p>
-
-<script>
-function generatePIN() {
-    var qrid = document.getElementById('lock_select').value;
-    if(!qrid) return alert('Sélectionnez un bâtiment');
-    
-    document.getElementById('pin_display').innerText = "....";
-    document.getElementById('status').innerText = "Connexion à la serrure...";
-    
-    fetch('/get_pin/' + qrid)
-        .then(response => response.json())
-        .then(data => {
-            document.getElementById('pin_display').innerText = data.pin;
-            document.getElementById('status').innerText = "Code valable 4 heures";
-        });
-}
-</script>
+HTML_TECH = """
+<body style="font-family:sans-serif; background:#1e293b; color:white; display:flex; justify-content:center; align-items:center; height:100vh; margin:0;">
+    <div style="text-align:center; padding:20px;">
+        <h2 style="color:#60a5fa;">ACCÈS TECHNIQUE</h2>
+        <p>{{batiment}}</p>
+        <div style="font-size:70px; font-weight:bold; background:white; color:#1e293b; padding:20px; border-radius:15px; margin:20px 0; letter-spacing:5px;">
+            {{pin}}
+        </div>
+        <p style="font-size:12px; opacity:0.7;">Code valable 4 heures. Appuyez sur 'Unlocked' après avoir tapé le code.</p>
+    </div>
+</body>
 """
 
 if __name__ == '__main__':
