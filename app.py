@@ -26,18 +26,43 @@ def get_airtable_records(formula=""):
 
 def generate_igloo_pin(lock_id):
     try:
-        auth = requests.post("https://auth.igloohome.co/oauth2/token",
-                             auth=(IGLOO_CLIENT_ID, IGLOO_CLIENT_SECRET),
-                             data={"grant_type": "client_credentials"}, verify=False).json()
-        token = auth.get('access_token')
-        now = datetime.utcnow() + timedelta(minutes=2)
-        payload = {"name": "Nanas_Access", "type": "duration", 
-                   "startDate": now.strftime('%Y-%m-%dT%H:%M:%SZ'), 
-                   "endDate": (now + timedelta(hours=4)).strftime('%Y-%m-%dT%H:%M:%SZ')}
-        r = requests.post(f"https://api.igloohome.co/v2/locks/{lock_id}/pins", 
-                          json=payload, headers={"Authorization": f"Bearer {token}"}, verify=False).json()
-        return r.get('pin', "Erreur")
-    except: return "Indisponible"
+        # 1. Tentative d'obtention du Token avec une méthode alternative
+        auth_url = "https://auth.igloohome.co/oauth2/token"
+        payload_auth = {
+            "grant_type": "client_credentials",
+            "client_id": IGLOO_CLIENT_ID,
+            "client_secret": IGLOO_CLIENT_SECRET
+        }
+        
+        # On essaie d'envoyer les identifiants en direct dans le JSON
+        auth_res = requests.post(auth_url, data=payload_auth, verify=False)
+        
+        if auth_res.status_code != 200:
+            # Si ça échoue encore, on tente la méthode "Header" classique
+            auth_res = requests.post(auth_url, auth=(IGLOO_CLIENT_ID, IGLOO_CLIENT_SECRET), 
+                                     data={"grant_type": "client_credentials"}, verify=False)
+
+        token = auth_res.json().get('access_token')
+        if not token:
+            return "TOKEN_FAIL"
+
+        # 2. Demande du PIN
+        pin_url = f"https://api.igloohome.co/v2/locks/{lock_id}/pins"
+        now = datetime.utcnow() + timedelta(minutes=5)
+        payload_pin = {
+            "name": "Nanas_Access",
+            "type": "duration",
+            "startDate": now.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            "endDate": (now + timedelta(hours=4)).strftime('%Y-%m-%dT%H:%M:%SZ')
+        }
+        
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        r = requests.post(pin_url, json=payload_pin, headers=headers, verify=False)
+        
+        return r.json().get('pin', "ERREUR_PIN")
+
+    except Exception as e:
+        return "INDISPONIBLE"
 
 # --- 1. PAGE TECH (Accès Direct QR) ---
 @app.route('/access/<qr_id>')
@@ -144,3 +169,4 @@ HTML_TECH = """
 
 if __name__ == '__main__':
     app.run()
+
