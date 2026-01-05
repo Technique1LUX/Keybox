@@ -139,4 +139,264 @@ def get_oauth_token() -> str:
 def choose_variance_hourly(fields: dict) -> int:
     """
     Hourly variance: 1..3
-    Si Airtable a un champ 'VarianceHourly', on l'utilise et on tour
+    Si Airtable a un champ 'VarianceHourly', on l'utilise et on tourne.
+    Sinon, on revient à 1.
+    """
+    v = fields.get("VarianceHourly")
+    try:
+        v = int(v) if v is not None else 1
+    except Exception:
+        v = 1
+    if v < 1 or v > 3:
+        v = 1
+    return v
+
+def rotate_variance_hourly(current: int) -> int:
+    return 1 if current >= 3 else current + 1
+
+def generate_igloo_hourly_algopin(device_id: str, record_id: str = None, record_fields: dict = None):
+    """
+    Génère un AlgoPIN Hourly via api.igloodeveloper.co.
+    Retourne: (pin, pinId, startDate, endDate, error)
+    """
+    try:
+        token = get_oauth_token()
+
+        start_dt = round_up_to_next_hour(datetime.now(TZ))
+        end_dt = start_dt + timedelta(hours=PIN_DURATION_HOURS)
+
+        # variance 1..3 (hourly)
+        variance = 1
+        if record_fields:
+            variance = choose_variance_hourly(record_fields)
+
+        payload = {
+            "variance": variance,
+            "startDate": iso_with_offset(start_dt),
+            "endDate": iso_with_offset(end_dt),
+            "accessName": "Nanas_Access"
+        }
+
+        url = f"{API_BASE}/devices/{device_id}/algopin/hourly"
+
+        r = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "curl/8.0"
+            },
+            json=payload,
+            verify=VERIFY_SSL,
+            timeout=20,
+        )
+
+        if r.status_code not in (200, 201):
+            return ("ERREUR_PIN", None, payload["startDate"], payload["endDate"], f"{r.status_code}: {r.text}")
+
+        j = r.json()
+        pin = j.get("pin")
+        pin_id = j.get("pinId")
+
+        if not pin:
+            return ("ERREUR_PIN", None, payload["startDate"], payload["endDate"], f"Réponse inattendue: {r.text}")
+
+        # Rotation variance stockée dans Airtable (optionnel)
+        if record_id and record_fields is not None:
+            next_v = rotate_variance_hourly(variance)
+            update_airtable_record(record_id, {"VarianceHourly": next_v})
+
+        return (pin, pin_id, payload["startDate"], payload["endDate"], None)
+
+    except Exception as e:
+        return ("INDISPONIBLE", None, None, None, str(e))
+
+
+# =========================
+# ROUTES
+# =========================
+
+@app.route('/access/<qr_id>')
+def tech_access(qr_id):
+    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
+    if not res:
+        return "QR Code Inconnu", 404
+
+    record = res[0]
+    fields = record.get("fields", {})
+
+    # DeviceId = IGK... (OBLIGATOIRE)
+    device_id = fields.get("DeviceId") or fields.get("LockID")
+    if not device_id:
+        return "DeviceId manquant dans Airtable (champ DeviceId).", 500
+
+    pin, pin_id, startDate, endDate, err = generate_igloo_hourly_algopin(
+        device_id=device_id,
+        record_id=record.get("id"),
+        record_fields=fields
+    )
+
+    return render_template_string(
+        HTML_TECH,
+        batiment=fields.get('Batiment', ''),
+        pin=pin,
+        startDate=startDate,
+        endDate=endDate,
+        err=err
+    )
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        client = request.form.get('client', '')
+        pwd = request.form.get('pwd', '')
+        records = get_airtable_records(f"AND({{Client}} = '{client}', {{Password}} = '{pwd}')")
+        if records:
+            session['user'] = client
+            session['role'] = 'gerance'
+            return redirect(url_for('gerance_portal'))
+        return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
+    return render_template_string(HTML_LOGIN)
+
+
+@app.route('/gerance')
+def gerance_portal():
+    if session.get('role') != 'gerance':
+        return redirect(url_for('login'))
+    records = get_airtable_records(f"{{Client}} = '{session['user']}'")
+    return render_template_string(HTML_PORTAL, title="Portail Gérance", records=records)
+
+
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    if request.method == 'POST':
+        if request.form.get('pwd') == ADMIN_PASSWORD:
+            session['role'] = 'admin'
+        else:
+            return "Accès refusé", 403
+
+    if session.get('role') != 'admin':
+        return '<form method="post">Pass Admin: <input type="password" name="pwd"><button>OK</button></form>'
+
+    records = get_airtable_records()
+    return render_template_string(HTML_PORTAL, title="FULL ADMIN", records=records)
+
+
+@app.route('/api/get_pin/<qr_id>')
+def api_pin(qr_id):
+    if not session.get('role'):
+        return jsonify({"pin": "Non autorisé"}), 401
+
+    res = get_airtable_records(f"{{QRID}} = '{qr_id}'")
+    if not res:
+        return jsonify({"pin": "QR inconnu"}), 404
+
+    record = res[0]
+    fields = record.get("fields", {})
+    device_id = fields.get("DeviceId") or fields.get("LockID")
+    if not device_id:
+        return jsonify({"pin": "DeviceId manquant (champ DeviceId)"}), 500
+
+    pin, pin_id, startDate, endDate, err = generate_igloo_hourly_algopin(
+        device_id=device_id,
+        record_id=record.get("id"),
+        record_fields=fields
+    )
+
+    return jsonify({
+        "pin": pin,
+        "pinId": pin_id,
+        "startDate": startDate,
+        "endDate": endDate,
+        "error": err
+    })
+
+
+# =========================
+# TEMPLATES
+# =========================
+HTML_LOGIN = """
+<body style="font-family:sans-serif; background:#f4f7f9; display:flex; justify-content:center; padding-top:100px;">
+    <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); width:350px; text-align:center;">
+        <h2 style="color:#2563eb;">Connexion Gérance</h2>
+        <form method="post">
+            <input type="text" name="client" placeholder="Nom Gérance" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
+            <input type="password" name="pwd" placeholder="Mot de passe" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
+            <button style="width:100%; padding:12px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Entrer</button>
+        </form>
+        {% if error %}<p style="color:red;">{{error}}</p>{% endif %}
+    </div>
+</body>
+"""
+
+HTML_PORTAL = """
+<body style="font-family:sans-serif; background:#f4f7f9; padding:20px;">
+    <div style="max-width:500px; margin:auto; background:white; padding:30px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); text-align:center;">
+        <h2 style="color:#2563eb;">{{title}}</h2>
+        <select id="sel" style="width:100%; padding:12px; margin:20px 0; border-radius:8px; border:1px solid #ddd;">
+            <option value="">-- Choisir un bâtiment --</option>
+            {% for r in records %}
+            <option value="{{r['fields']['QRID']}}">{{r['fields'].get('Batiment','?')}} ({{r['fields'].get('Client','?')}})</option>
+            {% endfor %}
+        </select>
+        <button onclick="getPin()" style="width:100%; padding:15px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">GÉNÉRER CODE</button>
+
+        <div id="pin" style="font-size:50px; font-weight:bold; margin:20px 0; color:#1e293b;">----</div>
+        <div id="meta" style="font-size:12px; opacity:0.8; color:#334155;"></div>
+        <div id="err" style="font-size:12px; color:#ef4444;"></div>
+    </div>
+    <script>
+        function getPin(){
+            const id = document.getElementById('sel').value;
+            if(!id) return;
+            document.getElementById('pin').innerText = "...";
+            document.getElementById('meta').innerText = "";
+            document.getElementById('err').innerText = "";
+
+            fetch('/api/get_pin/'+id)
+              .then(r=>r.json())
+              .then(d=>{
+                document.getElementById('pin').innerText = d.pin || "ERREUR";
+                if(d.startDate && d.endDate){
+                  document.getElementById('meta').innerText = `Actif: ${d.startDate} → ${d.endDate}`;
+                }
+                if(d.error){
+                  document.getElementById('err').innerText = d.error;
+                }
+              });
+        }
+    </script>
+</body>
+"""
+
+HTML_TECH = """
+<body style="font-family:sans-serif; background:#1e293b; color:white; display:flex; justify-content:center; align-items:center; height:100vh; margin:0;">
+    <div style="text-align:center; padding:20px; max-width:520px;">
+        <h2 style="color:#60a5fa;">ACCÈS TECHNIQUE</h2>
+        <p style="opacity:0.9;">{{batiment}}</p>
+
+        <div style="font-size:64px; font-weight:bold; background:white; color:#1e293b; padding:18px; border-radius:15px; margin:18px 0; letter-spacing:5px;">
+            {{pin}}
+        </div>
+
+        {% if startDate and endDate %}
+        <p style="font-size:12px; opacity:0.85;">
+          Actif: <b>{{startDate}}</b> → <b>{{endDate}}</b><br>
+          (Sans bridge: début à l’heure pile. Le code doit être utilisé au moins une fois dans les 24h après le début, sinon il expire.)
+        </p>
+        {% endif %}
+
+        {% if err %}
+        <p style="font-size:12px; color:#fca5a5;">Erreur: {{err}}</p>
+        {% endif %}
+    </div>
+</body>
+"""
+
+# =========================
+# MAIN (local seulement)
+# =========================
+if __name__ == '__main__':
+    app.run(debug=True)
