@@ -290,24 +290,53 @@ def gerance_can_access_qr(qrid: str) -> bool:
         return False
     return (kb.get("fields", {}).get("Client") == session.get("client"))
 
-def ensure_next_pin(keybox_record: dict):
-    """Prépare un NextPin pour la prochaine heure (sans cron)."""
+def ensure_active_or_next_pin(keybox_record: dict):
+    """
+    Retourne un PIN utilisable maintenant si Active est actif.
+    Sinon promeut Next -> Active s'il est devenu actif.
+    Sinon prépare Next pour la prochaine heure.
+    """
     fields = keybox_record.get("fields", {})
     rid = keybox_record.get("id")
     device_id = fields.get("DeviceId")
     if not device_id:
         return None, None, None, None, "DeviceId manquant"
 
+    active_pin = fields.get("ActivePin")
+    active_pid = fields.get("ActivePinId")
+    active_s = fields.get("ActiveStart")
+    active_e = fields.get("ActiveEnd")
+
     next_pin = fields.get("NextPin")
     next_pid = fields.get("NextPinId")
     next_s = fields.get("NextStart")
     next_e = fields.get("NextEnd")
 
+    # 1) Active utilisable ?
+    if active_pin and is_active_window(active_s, active_e):
+        return active_pin, active_pid, active_s, active_e, None
+
+    # 2) Next devenu actif ? -> promote
+    if next_pin and is_active_window(next_s, next_e):
+        at_update(T_KEYBOXES, rid, {
+            "ActivePin": next_pin,
+            "ActivePinId": next_pid or None,
+            "ActiveStart": next_s,
+            "ActiveEnd": next_e,
+            "NextPin": None,
+            "NextPinId": None,
+            "NextStart": None,
+            "NextEnd": None
+        })
+        return next_pin, next_pid, next_s, next_e, None
+
+    # 3) Préparer Next pour la prochaine heure
     start_dt = next_hour(now_lu())
     end_dt = start_dt + timedelta(hours=PIN_DURATION_HOURS)
     expected_s = iso(start_dt)
     expected_e = iso(end_dt)
 
+    # Next déjà prêt pour la bonne fenêtre ?
     if next_pin and next_s == expected_s and next_e == expected_e:
         return next_pin, next_pid, next_s, next_e, None
 
@@ -316,23 +345,22 @@ def ensure_next_pin(keybox_record: dict):
         variance = int(variance)
     except Exception:
         variance = 1
-    if variance not in (1, 2, 3):
+    if variance not in (1,2,3):
         variance = 1
 
-    try:
-        j = create_algopin_hourly(device_id, start_dt, end_dt, variance, "ACCESS_NEXT")
-        pin = j.get("pin")
-        pin_id = j.get("pinId")
-        at_update(T_KEYBOXES, rid, {
-            "NextPin": pin,
-            "NextPinId": pin_id,
-            "NextStart": expected_s,
-            "NextEnd": expected_e,
-            "VarianceHourly": rotate_variance_hourly(variance)
-        })
-        return pin, pin_id, expected_s, expected_e, None
-    except Exception as e:
-        return None, None, expected_s, expected_e, str(e)
+    j = create_algopin_hourly(device_id, start_dt, end_dt, variance, "ACCESS")
+    pin = j.get("pin")
+    pin_id = j.get("pinId")
+
+    at_update(T_KEYBOXES, rid, {
+        "NextPin": pin,
+        "NextPinId": pin_id,
+        "NextStart": expected_s,
+        "NextEnd": expected_e,
+        "VarianceHourly": rotate_variance_hourly(variance)
+    })
+
+    return pin, pin_id, expected_s, expected_e, None
 
 # =========================================================
 # Routes
@@ -744,4 +772,5 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
