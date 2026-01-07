@@ -578,7 +578,7 @@ def prefill():
     if secret != os.getenv("PREFILL_SECRET"):
         return "unauthorized", 401
 
-    keyboxes = at_get(T_KEYBOXES, max_records=200)
+    keyboxes = at_get(T_KEYBOXES, formula="{Enabled}=1", max_records=200)
     out = {"ok": 0, "err": 0, "results": []}
 
     for kb in keyboxes:
@@ -796,6 +796,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
