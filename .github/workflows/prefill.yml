@@ -1,19 +1,22 @@
-name: Prefill Igloo Pins
+name: Prefill Igloo Pins (debug)
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # toutes les 10 minutes (heure UTC)
+    - cron: "*/10 * * * *"   # toutes les 10 minutes (UTC)
   workflow_dispatch:
 
 jobs:
   prefill:
     runs-on: ubuntu-latest
     steps:
-            - name: Call prefill endpoint (debug)
+      - name: Call prefill endpoint (debug)
+        shell: bash
         run: |
+          echo "Calling URL from secret PREFILL_URL..."
           code=$(curl -sS -o resp.txt -w "%{http_code}" "${{ secrets.PREFILL_URL }}")
           echo "HTTP STATUS: $code"
           echo "---- RESPONSE (first 2000 chars) ----"
           head -c 2000 resp.txt || true
           echo ""
+          # Force failure if not 200, so the run is red and you notice
           test "$code" = "200"
