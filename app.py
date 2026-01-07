@@ -94,8 +94,9 @@ def get_current_pin_only(kb):
         })
         return np, npid, n_s, n_e, None
 
-    # 3) Rien d'actif maintenant
-    return None, None, None, None, "Aucun PIN actif maintenant (attendre l'heure pile ou utiliser le code d'urgence)."
+        # 3) NextPin existe mais pas encore actif (ne PAS afficher le pin)
+    if f.get("NextPin") and f.get("NextStart"):
+        return None, None, None, None, f"PIN prêt pour {f.get('NextStart')} (pas encore actif)."
 
 def is_active_window(start_iso: str, end_iso: str) -> bool:
     if not start_iso or not end_iso:
@@ -985,6 +986,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
