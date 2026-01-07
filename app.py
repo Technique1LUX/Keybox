@@ -21,6 +21,7 @@ T_KEYBOXES = os.getenv("AIRTABLE_TABLE_KEYBOXES", "Keyboxes")
 T_USERS = os.getenv("AIRTABLE_TABLE_USERS", "Users")
 T_PERMS = os.getenv("AIRTABLE_TABLE_PERMISSIONS", "Permissions")
 T_LOG = os.getenv("AIRTABLE_TABLE_ACCESSLOG", "AccessLog")
+T_REQUESTS = os.getenv("AIRTABLE_TABLE_REQUESTS", "Requests")
 
 # Igloo
 IGLOO_CLIENT_ID = os.getenv("IGLOO_CLIENT_ID")
@@ -64,6 +65,24 @@ def is_active_window(start_iso: str, end_iso: str) -> bool:
         return False
     n = now_lu()
     return s <= n < e
+ def at_read(table: str, record_id: str):
+    r = requests.get(f"{at_url(table)}/{record_id}", headers=at_headers(), timeout=20, verify=VERIFY_SSL)
+    r.raise_for_status()
+    return r.json()
+
+ def create_request(client: str, qrid: str, first: str, last: str, company: str, email: str, phone: str):
+    return at_create(T_REQUESTS, {
+        "Client": client,
+        "QRID": qrid,
+        "FirstName": first,
+        "LastName": last,
+        "Company": company,
+        "Email": norm_email(email),
+        "Phone": norm_phone(phone),
+        "Status": "pending",
+        "CreatedAt": iso(now_lu())
+    })
+   
 
 # ------------------ Airtable client ------------------
 def at_url(table: str) -> str:
@@ -394,15 +413,30 @@ def tech_access(qr_id):
     phone = norm_phone(request.form.get("phone") or "")
 
     allowed, reason, _user = is_user_allowed(qr_id, email=email, phone=phone)
-    if not allowed:
-        # (option) créer user pending si inconnu
-        if reason == "Utilisateur non enregistré.":
-            try:
+    allowed, reason, _user = is_user_allowed(qr_id, email=email, phone=phone)
+
+if not allowed:
+    # On crée une demande si:
+    # - user inconnu
+    # - ou user connu mais pas de permission sur cette box
+    if reason in ("Utilisateur non enregistré.", "Aucune permission active pour cette boîte."):
+        try:
+            kb = get_keybox_by_qr(qr_id)
+            client = kb.get("fields", {}).get("Client", "") if kb else ""
+            # on crée/maj le user en pending si inconnu
+            if reason == "Utilisateur non enregistré.":
                 upsert_user(first, last, company, email, phone, status="pending")
-            except Exception:
-                pass
-        log_access(qr_id, first, last, company, channel="none", error=reason)
-        return render_template_string(HTML_TECH_RESULT, ok=False, msg="Accès refusé", detail=reason)
+            # créer demande gérance
+            create_request(client, qr_id, first, last, company, email, phone)
+            detail = "Demande envoyée à la gérance. Vous serez validé(e) si autorisé."
+        except Exception as e:
+            detail = f"Impossible de créer la demande: {e}"
+    else:
+        detail = reason
+
+    log_access(qr_id, first, last, company, channel="none", error=reason)
+    return render_template_string(HTML_TECH_RESULT, ok=False, msg="Accès refusé", detail=detail)
+
 
     # Sans cron on ne peut pas créer “pour l’heure passée”. On prépare au moins la prochaine.
     pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
@@ -571,6 +605,53 @@ def admin():
 
     recs = at_get(T_KEYBOXES, max_records=200)
     return render_template_string(HTML_ADMIN, records=recs)
+    
+@app.route("/gerance/requests")
+def gerance_requests():
+    if session.get("role") != "gerance":
+        return redirect(url_for("login"))
+
+    client = session.get("client")
+    reqs = at_get(T_REQUESTS, formula=f"AND({{Client}}='{client}', {{Status}}='pending')", max_records=200)
+
+    return render_template_string(HTML_REQUESTS, reqs=reqs)
+    
+@app.route("/gerance/requests/<req_id>/approve", methods=["POST"])
+def gerance_approve_request(req_id):
+    if session.get("role") != "gerance":
+        return redirect(url_for("login"))
+
+    client = session.get("client")
+    req = at_read(T_REQUESTS, req_id)
+    f = req.get("fields", {})
+
+    if f.get("Client") != client:
+        return "Unauthorized", 401
+
+    qrid = f.get("QRID")
+    email = f.get("Email","")
+    phone = f.get("Phone","")
+
+    # Approuver user + créer permission active
+    upsert_user(f.get("FirstName",""), f.get("LastName",""), f.get("Company",""), email, phone, status="approved")
+    create_permission(qrid, email, phone, active=True)
+
+    at_update(T_REQUESTS, req_id, {"Status": "approved"})
+    return redirect(url_for("gerance_requests"))
+    
+@app.route("/gerance/requests/<req_id>/deny", methods=["POST"])
+def gerance_deny_request(req_id):
+    if session.get("role") != "gerance":
+        return redirect(url_for("login"))
+
+    client = session.get("client")
+    req = at_read(T_REQUESTS, req_id)
+    f = req.get("fields", {})
+    if f.get("Client") != client:
+        return "Unauthorized", 401
+
+    at_update(T_REQUESTS, req_id, {"Status": "denied"})
+    return redirect(url_for("gerance_requests"))
 
 @app.route("/prefill")
 def prefill():
@@ -652,6 +733,11 @@ HTML_GERANCE = """
               Gérer utilisateurs
             </button>
           </a>
+          <a href="/gerance/requests" style="text-decoration:none;">
+  <button style="padding:10px 12px;border:0;border-radius:10px;background:#111827;color:white;font-weight:800;cursor:pointer;">
+    Demandes en attente
+  </button>
+</a>
         </td>
       </tr>
       {% endfor %}
@@ -767,6 +853,47 @@ HTML_TECH_RESULT = """
   </div>
 </body>
 """
+HTML_REQUESTS = """
+<body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
+  <div style="max-width:900px;margin:auto;background:white;padding:24px;border-radius:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
+    <a href="/gerance" style="text-decoration:none;color:#2563eb;">← Retour</a>
+    <h2 style="color:#2563eb;margin-top:10px;">Demandes en attente</h2>
+
+    {% if not reqs %}
+      <p>Aucune demande en attente ✅</p>
+    {% else %}
+      <table style="width:100%;border-collapse:collapse;margin-top:10px;">
+        <tr style="text-align:left;border-bottom:1px solid #eee;">
+          <th style="padding:10px;">QRID</th>
+          <th style="padding:10px;">Nom</th>
+          <th style="padding:10px;">Entreprise</th>
+          <th style="padding:10px;">Email</th>
+          <th style="padding:10px;">Téléphone</th>
+          <th style="padding:10px;">Actions</th>
+        </tr>
+        {% for r in reqs %}
+          {% set f = r['fields'] %}
+          <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:10px;">{{f.get('QRID','')}}</td>
+            <td style="padding:10px;">{{f.get('FirstName','')}} {{f.get('LastName','')}}</td>
+            <td style="padding:10px;">{{f.get('Company','')}}</td>
+            <td style="padding:10px;">{{f.get('Email','')}}</td>
+            <td style="padding:10px;">{{f.get('Phone','')}}</td>
+            <td style="padding:10px;display:flex;gap:8px;">
+              <form method="post" action="/gerance/requests/{{r['id']}}/approve">
+                <button style="padding:8px 10px;border:0;border-radius:10px;background:#22c55e;color:white;font-weight:700;cursor:pointer;">Valider</button>
+              </form>
+              <form method="post" action="/gerance/requests/{{r['id']}}/deny">
+                <button style="padding:8px 10px;border:0;border-radius:10px;background:#ef4444;color:white;font-weight:700;cursor:pointer;">Refuser</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% endif %}
+  </div>
+</body>
+"""
 
 HTML_ADMIN = """
 <body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
@@ -796,6 +923,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
