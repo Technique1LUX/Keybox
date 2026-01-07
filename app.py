@@ -444,7 +444,7 @@ def gerance_portal():
         emergency_set = bool(f.get("EmergencyCode"))
 
         # on prépare le prochain pin (pour fluidifier)
-        _pin, _pid, s, e, err = ensure_next_pin(r)
+        _pin, _pid, s, e, err = ensure_active_or_next_pin(r)
 
         rows.append({
             "QRID": qr,
@@ -796,6 +796,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
