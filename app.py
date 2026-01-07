@@ -572,6 +572,30 @@ def admin():
     recs = at_get(T_KEYBOXES, max_records=200)
     return render_template_string(HTML_ADMIN, records=recs)
 
+@app.route("/prefill")
+def prefill():
+    secret = request.args.get("secret", "")
+    if secret != os.getenv("PREFILL_SECRET"):
+        return "unauthorized", 401
+
+    keyboxes = at_get(T_KEYBOXES, max_records=200)
+    out = {"ok": 0, "err": 0, "results": []}
+
+    for kb in keyboxes:
+        qr = kb.get("fields", {}).get("QRID", "")
+        try:
+            pin, pid, s, e, err = ensure_active_or_next_pin(kb)
+            out["results"].append({"qrid": qr, "start": s, "end": e, "error": err})
+            if err:
+                out["err"] += 1
+            else:
+                out["ok"] += 1
+        except Exception as ex:
+            out["results"].append({"qrid": qr, "error": str(ex)})
+            out["err"] += 1
+
+    return jsonify(out)
+
 # ------------------ HTML ------------------
 HTML_LOGIN = """
 <body style="font-family:sans-serif; background:#f4f7f9; display:flex; justify-content:center; padding-top:100px;">
@@ -772,6 +796,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
