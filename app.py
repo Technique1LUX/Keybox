@@ -405,7 +405,7 @@ def tech_access(qr_id):
         return render_template_string(HTML_TECH_RESULT, ok=False, msg="Accès refusé", detail=reason)
 
     # Sans cron on ne peut pas créer “pour l’heure passée”. On prépare au moins la prochaine.
-    pin, pin_id, s, e, err = ensure_next_pin(kb)
+    pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
         return render_template_string(HTML_TECH_RESULT, ok=False, msg="Service indisponible", detail=err)
@@ -772,5 +772,6 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
