@@ -84,13 +84,25 @@ def at_get(table: str, formula: str = "", max_records: int = 50):
     return r.json().get("records", [])
 
 def at_create(table: str, fields: dict):
-    r = requests.post(at_url(table), headers=at_headers(json=True), json={"fields": fields}, timeout=20, verify=VERIFY_SSL)
-    r.raise_for_status()
+    r = requests.post(
+        at_url(table),
+        headers=at_headers(json=True),
+        json={"fields": fields},
+        timeout=20,
+        verify=VERIFY_SSL
+    )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Airtable create failed {r.status_code}: {r.text}")
     return r.json()
 
 def at_update(table: str, record_id: str, fields: dict):
-    r = requests.patch(f"{at_url(table)}/{record_id}", headers=at_headers(json=True), json={"fields": fields},
-                       timeout=20, verify=VERIFY_SSL)
+    r = requests.patch(
+        f"{at_url(table)}/{record_id}",
+        headers=at_headers(json=True),
+        json={"fields": fields},
+        timeout=20,
+        verify=VERIFY_SSL
+    )
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Airtable update failed {r.status_code}: {r.text}")
     return r.json()
@@ -496,13 +508,18 @@ def gerance_add_user(qr_id):
     company = (request.form.get("company") or "").strip()
     email = norm_email(request.form.get("email") or "")
     phone = norm_phone(request.form.get("phone") or "")
+
     if not email and not phone:
         return "Email ou téléphone requis", 400
 
-    # gérance = on approuve directement (tu peux changer en pending si tu veux)
-    upsert_user(first, last, company, email, phone, status="approved")
-    create_permission(qr_id, email, phone, active=True)
-    return redirect(url_for("gerance_keybox", qr_id=qr_id))
+    try:
+        upsert_user(first, last, company, email, phone, status="approved")
+        create_permission(qr_id, email, phone, active=True)
+        return redirect(url_for("gerance_keybox", qr_id=qr_id))
+    except Exception as e:
+        # Visible dans Render logs + dans la page
+        print("ERROR add_user:", str(e))
+        return f"Erreur création utilisateur: {e}", 500
 
 @app.route("/gerance/perm/<perm_id>/toggle", methods=["POST"])
 def gerance_toggle_perm(perm_id):
@@ -727,3 +744,4 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
