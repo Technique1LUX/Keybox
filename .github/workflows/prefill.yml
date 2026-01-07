@@ -9,6 +9,11 @@ jobs:
   prefill:
     runs-on: ubuntu-latest
     steps:
-      - name: Call prefill endpoint
+            - name: Call prefill endpoint (debug)
         run: |
-          curl -fsS --retry 3 --retry-delay 10 "${{ secrets.PREFILL_URL }}"
+          code=$(curl -sS -o resp.txt -w "%{http_code}" "${{ secrets.PREFILL_URL }}")
+          echo "HTTP STATUS: $code"
+          echo "---- RESPONSE (first 2000 chars) ----"
+          head -c 2000 resp.txt || true
+          echo ""
+          test "$code" = "200"
