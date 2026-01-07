@@ -55,6 +55,47 @@ def round_down_hour(dt: datetime) -> datetime:
 
 def next_hour(dt: datetime) -> datetime:
     return round_down_hour(dt) + timedelta(hours=1)
+    
+def get_current_pin_only(kb):
+    """
+    Retourne uniquement un PIN utilisable MAINTENANT.
+    Ne génère PAS de nouveau PIN.
+    Peut promouvoir Next->Active si la fenêtre a commencé.
+    """
+    if not kb:
+        return None, None, None, None, "Keybox introuvable"
+
+    rid = kb.get("id")
+    f = kb.get("fields", {})
+
+    # 1) ActivePin valable maintenant
+    ap = f.get("ActivePin")
+    apid = f.get("ActivePinId")
+    a_s = f.get("ActiveStart")
+    a_e = f.get("ActiveEnd")
+    if ap and is_active_window(a_s, a_e):
+        return ap, apid, a_s, a_e, None
+
+    # 2) NextPin devenu actif ? -> promote vers Active
+    np = f.get("NextPin")
+    npid = f.get("NextPinId")
+    n_s = f.get("NextStart")
+    n_e = f.get("NextEnd")
+    if np and is_active_window(n_s, n_e):
+        at_update(T_KEYBOXES, rid, {
+            "ActivePin": np,
+            "ActivePinId": npid or None,
+            "ActiveStart": n_s,
+            "ActiveEnd": n_e,
+            "NextPin": None,
+            "NextPinId": None,
+            "NextStart": None,
+            "NextEnd": None
+        })
+        return np, npid, n_s, n_e, None
+
+    # 3) Rien d'actif maintenant
+    return None, None, None, None, "Aucun PIN actif maintenant (attendre l'heure pile ou utiliser le code d'urgence)."
 
 def is_active_window(start_iso: str, end_iso: str) -> bool:
     if not start_iso or not end_iso:
@@ -446,7 +487,8 @@ def tech_access(qr_id):
         )
 
     # --- AUTORISÉ => générer/retourner PIN ---
-    pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
+    pin, pin_id, s, e, err = get_current_pin_only(kb)
+
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
         return render_template_string(
@@ -943,6 +985,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
