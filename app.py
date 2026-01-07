@@ -116,9 +116,15 @@ def at_create(table: str, fields: dict):
     return r.json()
 
 def at_update(table: str, record_id: str, fields: dict):
-    r = requests.patch(f"{at_url(table)}/{record_id}", headers=at_headers(json=True),
-                       json={"fields": fields}, timeout=20, verify=VERIFY_SSL)
-    r.raise_for_status()
+    r = requests.patch(
+        f"{at_url(table)}/{record_id}",
+        headers=at_headers(json=True),
+        json={"fields": fields},
+        timeout=20,
+        verify=VERIFY_SSL
+    )
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"Airtable update failed {r.status_code}: {r.text}")
     return r.json()
 
 
@@ -342,10 +348,10 @@ def ensure_active_pin_for_keybox(keybox_record: dict, for_emergency: bool = Fals
                 "ActivePinId": next_pid or "",
                 "ActiveStart": next_s,
                 "ActiveEnd": next_e,
-                "NextPin": "",
-                "NextPinId": "",
-                "NextStart": "",
-                "NextEnd": ""
+                "NextPin": None,
+                "NextPinId": None,
+                "NextStart": None,
+                "NextEnd": None
             })
         except Exception:
             pass
@@ -722,3 +728,4 @@ HTML_ADMIN = """
 # =========================================================
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
