@@ -399,13 +399,20 @@ def tech_access(qr_id):
     bat = f.get("Batiment", "")
     ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
 
+    # GET = afficher formulaire
     if request.method == "GET":
         return render_template_string(HTML_TECH_FORM, batiment=bat)
 
+    # POST = anti-spam
     if not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600):
-        return render_template_string(HTML_TECH_RESULT, ok=False, msg="Trop de demandes",
-                                      detail="Réessayez dans quelques minutes.")
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Trop de demandes",
+            detail="Réessayez dans quelques minutes."
+        )
 
+    # POST = infos technicien
     first = (request.form.get("first") or "").strip()
     last = (request.form.get("last") or "").strip()
     company = (request.form.get("company") or "").strip()
@@ -413,40 +420,52 @@ def tech_access(qr_id):
     phone = norm_phone(request.form.get("phone") or "")
 
     allowed, reason, _user = is_user_allowed(qr_id, email=email, phone=phone)
-    allowed, reason, _user = is_user_allowed(qr_id, email=email, phone=phone)
 
-if not allowed:
-    # On crée une demande si:
-    # - user inconnu
-    # - ou user connu mais pas de permission sur cette box
-    if reason in ("Utilisateur non enregistré.", "Aucune permission active pour cette boîte."):
-        try:
-            kb = get_keybox_by_qr(qr_id)
-            client = kb.get("fields", {}).get("Client", "") if kb else ""
-            # on crée/maj le user en pending si inconnu
-            if reason == "Utilisateur non enregistré.":
-                upsert_user(first, last, company, email, phone, status="pending")
-            # créer demande gérance
-            create_request(client, qr_id, first, last, company, email, phone)
-            detail = "Demande envoyée à la gérance. Vous serez validé(e) si autorisé."
-        except Exception as e:
-            detail = f"Impossible de créer la demande: {e}"
-    else:
-        detail = reason
+    # --- NON AUTORISÉ => créer demande gérance + refuser ---
+    if not allowed:
+        if reason in ("Utilisateur non enregistré.", "Aucune permission active pour cette boîte."):
+            try:
+                client = f.get("Client", "")
 
-    log_access(qr_id, first, last, company, channel="none", error=reason)
-    return render_template_string(HTML_TECH_RESULT, ok=False, msg="Accès refusé", detail=detail)
+                if reason == "Utilisateur non enregistré.":
+                    upsert_user(first, last, company, email, phone, status="pending")
 
+                create_request(client, qr_id, first, last, company, email, phone)
+                detail = "Demande envoyée à la gérance. Vous serez validé(e) si autorisé."
+            except Exception as e:
+                detail = f"Impossible de créer la demande: {e}"
+        else:
+            detail = reason
 
-    # Sans cron on ne peut pas créer “pour l’heure passée”. On prépare au moins la prochaine.
+        log_access(qr_id, first, last, company, channel="none", error=reason)
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Accès refusé",
+            detail=detail
+        )
+
+    # --- AUTORISÉ => générer/retourner PIN ---
     pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
-        return render_template_string(HTML_TECH_RESULT, ok=False, msg="Service indisponible", detail=err)
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Service indisponible",
+            detail=err
+        )
 
-    detail = f"Préparé: {s} → {e} (actif à la prochaine heure pile)"
+    detail = f"Valide: {s} → {e}"
     log_access(qr_id, first, last, company, channel="screen", pin_id=pin_id, start=s, end=e, error="")
-    return render_template_string(HTML_TECH_RESULT, ok=True, msg="Code prêt", detail=detail, pin=pin)
+    return render_template_string(
+        HTML_TECH_RESULT,
+        ok=True,
+        msg="Code prêt",
+        detail=detail,
+        pin=pin
+    )
+
 
 # --- GERANCE LOGIN ---
 @app.route("/login", methods=["GET", "POST"])
@@ -853,6 +872,7 @@ HTML_TECH_RESULT = """
   </div>
 </body>
 """
+
 HTML_REQUESTS = """
 <body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
   <div style="max-width:900px;margin:auto;background:white;padding:24px;border-radius:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
@@ -923,7 +943,6 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
-
 
 
 
