@@ -65,12 +65,12 @@ def is_active_window(start_iso: str, end_iso: str) -> bool:
         return False
     n = now_lu()
     return s <= n < e
- def at_read(table: str, record_id: str):
+def at_read(table: str, record_id: str):
     r = requests.get(f"{at_url(table)}/{record_id}", headers=at_headers(), timeout=20, verify=VERIFY_SSL)
     r.raise_for_status()
     return r.json()
 
- def create_request(client: str, qrid: str, first: str, last: str, company: str, email: str, phone: str):
+def create_request(client: str, qrid: str, first: str, last: str, company: str, email: str, phone: str):
     return at_create(T_REQUESTS, {
         "Client": client,
         "QRID": qrid,
@@ -923,6 +923,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
