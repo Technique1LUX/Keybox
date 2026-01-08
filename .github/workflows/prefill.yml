@@ -18,7 +18,10 @@ jobs:
         run: |
           curl -sS --max-time 30 --retry 6 --retry-all-errors \
             "${{ secrets.RENDER_BASE_URL }}/" >/dev/null || true
-
+      - name: Debug PREFILL_URL (safe)
+        run: |
+          echo "PREFILL_URL (redacted):"
+          echo "${{ secrets.PREFILL_URL }}" | sed -E 's/(secret=)[^&]+/\1***/g'
       - name: Call /prefill
         run: |
           URL="${{ secrets.RENDER_BASE_URL }}/prefill?secret=${{ secrets.PREFILL_SECRET }}"
