@@ -715,7 +715,7 @@ def gerance_deny_request(req_id):
     at_update(T_REQUESTS, req_id, {"Status": "denied"})
     return redirect(url_for("gerance_requests"))
 
-@app.route("/prefill")
+@app.route("/prefill", strict_slashes=False)
 def prefill():
     secret = request.args.get("secret", "")
     if secret != os.getenv("PREFILL_SECRET"):
@@ -986,6 +986,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
