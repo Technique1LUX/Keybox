@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import traceback
 from flask import Flask, render_template_string, request, session, jsonify, redirect, url_for
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -673,10 +674,21 @@ def gerance_requests():
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
 
-    client = session.get("client")
-    reqs = at_get(T_REQUESTS, formula=f"AND({{Client}}='{client}', {{Status}}='pending')", max_records=200)
+    try:
+        client = session.get("client") or ""
+        reqs = at_get(
+            T_REQUESTS,
+            formula=f"AND({{Client}}='{client}', {{Status}}='pending')",
+            max_records=200
+        ) or []
 
-    return render_template_string(HTML_REQUESTS, reqs=reqs)
+        return render_template_string(HTML_REQUESTS, reqs=reqs, client=client)
+
+    except Exception as e:
+        print("ERROR /gerance/requests:", str(e))
+        print(traceback.format_exc())
+        return f"Erreur serveur /gerance/requests: {e}", 500
+
     
 @app.route("/gerance/requests/<req_id>/approve", methods=["POST"])
 def gerance_approve_request(req_id):
@@ -986,6 +998,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
