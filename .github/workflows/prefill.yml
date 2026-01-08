@@ -1,22 +1,36 @@
-name: Prefill Igloo Pins (debug)
+name: Prefill Igloo PINs
 
 on:
   schedule:
-    - cron: "*/10 * * * *"   # toutes les 10 minutes (UTC)
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 
 jobs:
   prefill:
     runs-on: ubuntu-latest
     steps:
-      - name: Call prefill endpoint (debug)
-        shell: bash
+      - name: Show target (no secrets)
         run: |
-          echo "Calling URL from secret PREFILL_URL..."
-          code=$(curl -sS -o resp.txt -w "%{http_code}" "${{ secrets.PREFILL_URL }}")
-          echo "HTTP STATUS: $code"
+          echo "BASE: ${{ secrets.RENDER_BASE_URL }}"
+          echo "PATH: /prefill?secret=***"
+
+      - name: Wake up Render
+        run: |
+          curl -sS --max-time 30 --retry 6 --retry-all-errors \
+            "${{ secrets.RENDER_BASE_URL }}/" >/dev/null || true
+
+      - name: Call /prefill
+        run: |
+          URL="${{ secrets.RENDER_BASE_URL }}/prefill?secret=${{ secrets.PREFILL_SECRET }}"
+          status=$(curl -sS -o resp.txt -w "%{http_code}" \
+            --max-time 60 --retry 6 --retry-all-errors \
+            "$URL")
+
+          echo "HTTP STATUS: $status"
           echo "---- RESPONSE (first 2000 chars) ----"
           head -c 2000 resp.txt || true
           echo ""
-          # Force failure if not 200, so the run is red and you notice
-          test "$code" = "200"
+
+          if [ "$status" != "200" ]; then
+            exit 1
+          fi
