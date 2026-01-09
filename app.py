@@ -44,9 +44,12 @@ def now_lu():
 def iso(dt: datetime) -> str:
     return dt.astimezone(TZ).isoformat(timespec="seconds")
 
-def parse_iso(s: str):
+ddef parse_iso(s: str):
     try:
-        return datetime.fromisoformat(s)
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)  # fallback Luxembourg si string sans offset
+        return dt
     except Exception:
         return None
 
@@ -95,37 +98,13 @@ def get_current_pin_only(kb):
         })
         return np, npid, n_s, n_e, None
 
-        # 3) NextPin existe mais pas encore actif (ne PAS afficher le pin)
+    # 3) NextPin existe mais pas encore actif => ne PAS l'afficher
     if f.get("NextPin") and f.get("NextStart"):
         return None, None, None, None, f"PIN prêt pour {f.get('NextStart')} (pas encore actif)."
 
-def is_active_window(start_iso: str, end_iso: str) -> bool:
-    if not start_iso or not end_iso:
-        return False
-    s = parse_iso(start_iso)
-    e = parse_iso(end_iso)
-    if not s or not e:
-        return False
-    n = now_lu()
-    return s <= n < e
-def at_read(table: str, record_id: str):
-    r = requests.get(f"{at_url(table)}/{record_id}", headers=at_headers(), timeout=20, verify=VERIFY_SSL)
-    r.raise_for_status()
-    return r.json()
-
-def create_request(client: str, qrid: str, first: str, last: str, company: str, email: str, phone: str):
-    return at_create(T_REQUESTS, {
-        "Client": client,
-        "QRID": qrid,
-        "FirstName": first,
-        "LastName": last,
-        "Company": company,
-        "Email": norm_email(email),
-        "Phone": norm_phone(phone),
-        "Status": "pending",
-        "CreatedAt": iso(now_lu())
-    })
-   
+    # 4) Rien du tout
+    return None, None, None, None, "Aucun PIN actif disponible."
+  
 
 # ------------------ Airtable client ------------------
 def at_url(table: str) -> str:
@@ -1074,6 +1053,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
