@@ -210,21 +210,38 @@ def rotate_variance_hourly(cur: int) -> int:
         cur = 1
     return 1 if cur == 3 else cur + 1
 
-def create_algopin_hourly(device_id: str, start_dt: datetime, end_dt: datetime, variance: int, access_name: str):
-    token = get_oauth_token()
-    url = f"{API_BASE}/devices/{device_id}/algopin/hourly"
-    payload = {"variance": variance, "startDate": iso(start_dt), "endDate": iso(end_dt), "accessName": access_name}
-    r = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json",
-                 "User-Agent": "curl/8.0"},
-        json=payload,
-        timeout=20,
-        verify=VERIFY_SSL
-    )
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"AlgoPIN failed {r.status_code}: {r.text}")
-    return r.json()
+def igloo_create_hourly_pin(kb, start_dt: datetime, end_dt: datetime):
+    try:
+        # Attention: adapter selon TON endpoint (igloodeveloper)
+        device_id = kb.get("fields", {}).get("DeviceId") or kb.get("fields", {}).get("deviceId") or kb.get("fields", {}).get("LockID")
+        if not device_id:
+            return None, None, "DeviceId manquant"
+
+        token = get_token()  # ta fonction existante OAuth (Bearer)
+        url = f"https://api.igloodeveloper.co/igloohome/devices/{device_id}/algopin/hourly"
+
+        payload = {
+            "variance": int(kb.get("fields", {}).get("VarianceHourly", 1)),
+            "startDate": start_dt.strftime("%Y-%m-%dT%H:00:00+01:00"),
+            "endDate": end_dt.strftime("%Y-%m-%dT%H:00:00+01:00"),
+            "accessName": "PREFILL"
+        }
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+        r = requests.post(url, json=payload, headers=headers, timeout=20, verify=VERIFY_SSL)
+        if r.status_code not in (200, 201):
+            return None, None, f"Igloo {r.status_code}: {r.text}"
+
+        j = r.json()
+        return j.get("pin"), j.get("pinId"), None
+
+    except Exception as e:
+        return None, None, str(e)
 
 # ------------------ Rate limit ------------------
 def rate_limit(key: str, max_req=5, window_sec=600) -> bool:
@@ -352,77 +369,73 @@ def gerance_can_access_qr(qrid: str) -> bool:
         return False
     return (kb.get("fields", {}).get("Client") == session.get("client"))
 
-def ensure_active_or_next_pin(keybox_record: dict):
+def ensure_active_or_next_pin(kb):
     """
-    Retourne un PIN utilisable maintenant si Active est actif.
-    Sinon promeut Next -> Active s'il est devenu actif.
-    Sinon prépare Next pour la prochaine heure.
+    Garantit:
+    - un PIN actif couvrant l'heure courante (ActivePin)
+    - un PIN prêt pour l'heure suivante (NextPin)
+    Retourne: (active_pin, active_pin_id, active_start_iso, active_end_iso, err)
     """
-    fields = keybox_record.get("fields", {})
-    rid = keybox_record.get("id")
-    device_id = fields.get("DeviceId")
-    if not device_id:
-        return None, None, None, None, "DeviceId manquant"
-
-    active_pin = fields.get("ActivePin")
-    active_pid = fields.get("ActivePinId")
-    active_s = fields.get("ActiveStart")
-    active_e = fields.get("ActiveEnd")
-
-    next_pin = fields.get("NextPin")
-    next_pid = fields.get("NextPinId")
-    next_s = fields.get("NextStart")
-    next_e = fields.get("NextEnd")
-
-    # 1) Active utilisable ?
-    if active_pin and is_active_window(active_s, active_e):
-        return active_pin, active_pid, active_s, active_e, None
-
-    # 2) Next devenu actif ? -> promote
-    if next_pin and is_active_window(next_s, next_e):
-        at_update(T_KEYBOXES, rid, {
-            "ActivePin": next_pin,
-            "ActivePinId": next_pid or None,
-            "ActiveStart": next_s,
-            "ActiveEnd": next_e,
-            "NextPin": None,
-            "NextPinId": None,
-            "NextStart": None,
-            "NextEnd": None
-        })
-        return next_pin, next_pid, next_s, next_e, None
-
-    # 3) Préparer Next pour la prochaine heure
-    start_dt = next_hour(now_lu())
-    end_dt = start_dt + timedelta(hours=PIN_DURATION_HOURS)
-    expected_s = iso(start_dt)
-    expected_e = iso(end_dt)
-
-    # Next déjà prêt pour la bonne fenêtre ?
-    if next_pin and next_s == expected_s and next_e == expected_e:
-        return next_pin, next_pid, next_s, next_e, None
-
-    variance = fields.get("VarianceHourly") or 1
     try:
-        variance = int(variance)
-    except Exception:
-        variance = 1
-    if variance not in (1,2,3):
-        variance = 1
+        f = kb.get("fields", {})
+        now = now_lu()
 
-    j = create_algopin_hourly(device_id, start_dt, end_dt, variance, "ACCESS")
-    pin = j.get("pin")
-    pin_id = j.get("pinId")
+        cur_start = round_down_hour(now)
+        cur_end = cur_start + timedelta(hours=1)
 
-    at_update(T_KEYBOXES, rid, {
-        "NextPin": pin,
-        "NextPinId": pin_id,
-        "NextStart": expected_s,
-        "NextEnd": expected_e,
-        "VarianceHourly": rotate_variance_hourly(variance)
-    })
+        # 1) Si ActivePin couvre maintenant => OK
+        if (
+            f.get("ActivePin")
+            and f.get("ActiveStart")
+            and f.get("ActiveEnd")
+            and is_active_window(f["ActiveStart"], f["ActiveEnd"])
+        ):
+            active_pin = f.get("ActivePin")
+            active_pin_id = f.get("ActivePinId")
+            active_start = f.get("ActiveStart")
+            active_end = f.get("ActiveEnd")
+        else:
+            # 2) Sinon on crée ActivePin pour l'heure courante
+            pin, pin_id, err = igloo_create_hourly_pin(kb, cur_start, cur_end)
+            if err:
+                return None, None, None, None, err
 
-    return pin, pin_id, expected_s, expected_e, None
+            at_update(T_KEYBOXES, kb["id"], {
+                "ActivePin": pin,
+                "ActivePinId": pin_id,
+                "ActiveStart": iso(cur_start),
+                "ActiveEnd": iso(cur_end),
+            })
+
+            active_pin = pin
+            active_pin_id = pin_id
+            active_start = iso(cur_start)
+            active_end = iso(cur_end)
+
+        # 3) Préparer NextPin (heure suivante)
+        next_start = cur_start + timedelta(hours=1)
+        next_end = next_start + timedelta(hours=1)
+
+        # Si NextPin correspond déjà à la bonne fenêtre, on ne recrée pas
+        if not (
+            f.get("NextPin")
+            and f.get("NextStart") == iso(next_start)
+            and f.get("NextEnd") == iso(next_end)
+        ):
+            pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
+            if not err2:
+                at_update(T_KEYBOXES, kb["id"], {
+                    "NextPin": pin2,
+                    "NextPinId": pin2_id,
+                    "NextStart": iso(next_start),
+                    "NextEnd": iso(next_end),
+                })
+
+        return active_pin, active_pin_id, active_start, active_end, None
+
+    except Exception as e:
+        return None, None, None, None, str(e)
+
 
 # =========================================================
 # Routes
@@ -1026,6 +1039,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
