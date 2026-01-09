@@ -466,21 +466,25 @@ def tech_access(qr_id):
 
     # --- NON AUTORISÉ => créer demande gérance + refuser ---
     if not allowed:
-        if reason in ("Utilisateur non enregistré.", "Aucune permission active pour cette boîte."):
+        if (reason == "Utilisateur non enregistré."
+    or reason == "Aucune permission active pour cette boîte."
+    or "status=pending" in reason):
+
             try:
                 client = f.get("Client", "")
 
+                # si inconnu -> user pending
                 if reason == "Utilisateur non enregistré.":
                     upsert_user(first, last, company, email, phone, status="pending")
 
-                req = create_request(client, qr_id, first, last, company, email, phone)
-                print("✅ REQUEST CREATED:", req.get("id"), req.get("fields", {}).get("QRID"), req.get("fields", {}).get("Status"))
-                detail = f"Demande envoyée à la gérance. ID={req.get('id')}"
+                # si déjà pending -> créer la Request si elle n'existe pas déjà
+                existing = find_pending_request(qr_id, email, phone)
+                if existing:
+                    detail = f"Demande déjà en attente de validation. (ID={existing.get('id')})"
+                else:
+                    req = create_request(client, qr_id, first, last, company, email, phone)
+                    detail = f"Demande envoyée à la gérance. (ID={req.get('id')})"
 
-            except Exception as e:
-                detail = f"Impossible de créer la demande: {e}"
-        else:
-            detail = reason
 
         log_access(qr_id, first, last, company, channel="none", error=reason)
         return render_template_string(
@@ -676,20 +680,21 @@ def gerance_requests():
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
 
-    try:
-        client = session.get("client") or ""
-        reqs = at_get(
-            T_REQUESTS,
-            formula=f"AND({{Client}}='{client}', {{Status}}='pending')",
-            max_records=200
-        ) or []
+    client = session.get("client") or ""
 
-        return render_template_string(HTML_REQUESTS, reqs=reqs, client=client)
+    # 1) Récupère les keyboxes de ce client (donc les QRID autorisés)
+    keyboxes = get_keyboxes_for_client(client)
+    qrids = { (kb.get("fields", {}) or {}).get("QRID") for kb in keyboxes }
+    qrids.discard(None)
+    qrids.discard("")
 
-    except Exception as e:
-        print("ERROR /gerance/requests:", str(e))
-        print(traceback.format_exc())
-        return f"Erreur serveur /gerance/requests: {e}", 500
+    # 2) Récupère toutes les demandes pending
+    reqs = at_get(T_REQUESTS, formula="{Status}='pending'", max_records=200) or []
+
+    # 3) Filtre côté serveur pour ne garder que les QRID de ce client
+    reqs = [r for r in reqs if (r.get("fields", {}) or {}).get("QRID") in qrids]
+
+    return render_template_string(HTML_REQUESTS, reqs=reqs, client=client)
 
     
 @app.route("/gerance/requests/<req_id>/approve", methods=["POST"])
@@ -1000,6 +1005,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
