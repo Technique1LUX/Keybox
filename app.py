@@ -473,8 +473,10 @@ def tech_access(qr_id):
                 if reason == "Utilisateur non enregistré.":
                     upsert_user(first, last, company, email, phone, status="pending")
 
-                create_request(client, qr_id, first, last, company, email, phone)
-                detail = "Demande envoyée à la gérance. Vous serez validé(e) si autorisé."
+                req = create_request(client, qr_id, first, last, company, email, phone)
+                print("✅ REQUEST CREATED:", req.get("id"), req.get("fields", {}).get("QRID"), req.get("fields", {}).get("Status"))
+                detail = f"Demande envoyée à la gérance. ID={req.get('id')}"
+
             except Exception as e:
                 detail = f"Impossible de créer la demande: {e}"
         else:
@@ -998,6 +1000,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
