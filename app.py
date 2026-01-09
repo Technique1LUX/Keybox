@@ -427,6 +427,28 @@ def ensure_active_or_next_pin(keybox_record: dict):
 # =========================================================
 # Routes
 # =========================================================
+def find_pending_request(qrid: str, email: str, phone: str):
+    email = norm_email(email or "")
+    phone = norm_phone(phone or "")
+
+    conds = [f"{{QRID}}='{qrid}'", "{Status}='pending'"]
+
+    idconds = []
+    if email:
+        idconds.append(f"{{Email}}='{email}'")
+    if phone:
+        idconds.append(f"{{Phone}}='{phone}'")
+
+    if idconds:
+        if len(idconds) == 1:
+            conds.append(idconds[0])
+        else:
+            conds.append("OR(" + ",".join(idconds) + ")")
+
+    formula = "AND(" + ",".join(conds) + ")"
+    recs = at_get(T_REQUESTS, formula=formula, max_records=1)
+    return recs[0] if recs else None
+
 @app.route("/")
 def home():
     return "OK"
@@ -1004,6 +1026,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
