@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_only_change_me")
 
-TZ = ZoneInfo("Europe/Luxembourg")
+APP_TZ = ZoneInfo("Europe/Luxembourg")
 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 PIN_DURATION_HOURS = int(os.getenv("PIN_DURATION_HOURS", "4"))
@@ -175,7 +175,7 @@ def get_oauth_token() -> str:
     if _token_cache["token"] and now_ts < (_token_cache["exp"] - 120):
         return _token_cache["token"]
 
-    if not IGLOO_CLIENT_ID or not IGLOO_CLIENT_SECRET:
+    if not CLIENT_ID or not IGLOO_CLIENT_SECRET:
         raise RuntimeError("IGLOO_CLIENT_ID / IGLOO_CLIENT_SECRET manquants (env).")
 
     headers = {
@@ -220,10 +220,14 @@ def igloo_create_hourly_pin(kb, start_dt: datetime, end_dt: datetime):
         token = get_token()  # ta fonction existante OAuth (Bearer)
         url = f"https://api.igloodeveloper.co/igloohome/devices/{device_id}/algopin/hourly"
 
+                # force timezone Luxembourg + arrondi propre
+        start_dt = start_dt.astimezone(APP_TZ).replace(minute=0, second=0, microsecond=0)
+        end_dt = end_dt.astimezone(APP_TZ).replace(minute=0, second=0, microsecond=0)
+
         payload = {
             "variance": int(kb.get("fields", {}).get("VarianceHourly", 1)),
-            "startDate": start_dt.strftime("%Y-%m-%dT%H:00:00+01:00"),
-            "endDate": end_dt.strftime("%Y-%m-%dT%H:00:00+01:00"),
+            "startDate": start_dt.isoformat(timespec="seconds"),
+            "endDate": end_dt.isoformat(timespec="seconds"),
             "accessName": "PREFILL"
         }
 
@@ -369,72 +373,103 @@ def gerance_can_access_qr(qrid: str) -> bool:
         return False
     return (kb.get("fields", {}).get("Client") == session.get("client"))
 
+from datetime import timedelta
+from zoneinfo import ZoneInfo
+
+APP_TZ = ZoneInfo("Europe/Luxembourg")
+
 def ensure_active_or_next_pin(kb):
     """
     Garantit:
-    - un PIN actif couvrant l'heure courante (ActivePin)
-    - un PIN prêt pour l'heure suivante (NextPin)
+    - ActivePin = heure courante (Luxembourg)
+    - NextPin = heure suivante
     Retourne: (active_pin, active_pin_id, active_start_iso, active_end_iso, err)
     """
     try:
         f = kb.get("fields", {})
-        now = now_lu()
 
+        now = now_lu()  # doit être aware en Europe/Luxembourg
         cur_start = round_down_hour(now)
         cur_end = cur_start + timedelta(hours=1)
 
-        # 1) Si ActivePin couvre maintenant => OK
+        cur_start_iso = iso(cur_start)
+        cur_end_iso = iso(cur_end)
+
+        # 0) Si Next correspond à l'heure courante => on "promote" Next -> Active
         if (
-            f.get("ActivePin")
-            and f.get("ActiveStart")
-            and f.get("ActiveEnd")
-            and is_active_window(f["ActiveStart"], f["ActiveEnd"])
+            f.get("NextPin")
+            and f.get("NextStart") == cur_start_iso
+            and f.get("NextEnd") == cur_end_iso
         ):
-            active_pin = f.get("ActivePin")
-            active_pin_id = f.get("ActivePinId")
-            active_start = f.get("ActiveStart")
-            active_end = f.get("ActiveEnd")
-        else:
-            # 2) Sinon on crée ActivePin pour l'heure courante
+            at_update(T_KEYBOXES, kb["id"], {
+                "ActivePin": f.get("NextPin"),
+                "ActivePinId": f.get("NextPinId"),
+                "ActiveStart": f.get("NextStart"),
+                "ActiveEnd": f.get("NextEnd"),
+            })
+            # on met à jour localement aussi
+            f["ActivePin"] = f.get("NextPin")
+            f["ActivePinId"] = f.get("NextPinId")
+            f["ActiveStart"] = f.get("NextStart")
+            f["ActiveEnd"] = f.get("NextEnd")
+
+        # 1) ActivePin OK seulement s'il couvre MAINTENANT ET correspond à la fenêtre courante
+        active_ok = (
+            f.get("ActivePin")
+            and f.get("ActiveStart") == cur_start_iso
+            and f.get("ActiveEnd") == cur_end_iso
+            and is_active_window(f["ActiveStart"], f["ActiveEnd"])
+        )
+
+        if not active_ok:
             pin, pin_id, err = igloo_create_hourly_pin(kb, cur_start, cur_end)
             if err:
+                # IMPORTANT: ne jamais retourner NextPin en fallback
                 return None, None, None, None, err
 
             at_update(T_KEYBOXES, kb["id"], {
                 "ActivePin": pin,
                 "ActivePinId": pin_id,
-                "ActiveStart": iso(cur_start),
-                "ActiveEnd": iso(cur_end),
+                "ActiveStart": cur_start_iso,
+                "ActiveEnd": cur_end_iso,
             })
 
-            active_pin = pin
-            active_pin_id = pin_id
-            active_start = iso(cur_start)
-            active_end = iso(cur_end)
+            f["ActivePin"] = pin
+            f["ActivePinId"] = pin_id
+            f["ActiveStart"] = cur_start_iso
+            f["ActiveEnd"] = cur_end_iso
 
-        # 3) Préparer NextPin (heure suivante)
-        next_start = cur_start + timedelta(hours=1)
+        # 2) Préparer NextPin (heure suivante)
+        next_start = cur_end
         next_end = next_start + timedelta(hours=1)
+        next_start_iso = iso(next_start)
+        next_end_iso = iso(next_end)
 
-        # Si NextPin correspond déjà à la bonne fenêtre, on ne recrée pas
-        if not (
+        next_ok = (
             f.get("NextPin")
-            and f.get("NextStart") == iso(next_start)
-            and f.get("NextEnd") == iso(next_end)
-        ):
+            and f.get("NextStart") == next_start_iso
+            and f.get("NextEnd") == next_end_iso
+        )
+
+        if not next_ok:
             pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
             if not err2:
                 at_update(T_KEYBOXES, kb["id"], {
                     "NextPin": pin2,
                     "NextPinId": pin2_id,
-                    "NextStart": iso(next_start),
-                    "NextEnd": iso(next_end),
+                    "NextStart": next_start_iso,
+                    "NextEnd": next_end_iso,
                 })
+                
+print("PIN_DEBUG now=", now.isoformat(), "cur=", cur_start_iso, cur_end_iso,
+      "Active=", f.get("ActiveStart"), f.get("ActiveEnd"),
+      "Next=", f.get("NextStart"), f.get("NextEnd"))
 
-        return active_pin, active_pin_id, active_start, active_end, None
+        return f["ActivePin"], f.get("ActivePinId"), f.get("ActiveStart"), f.get("ActiveEnd"), None
 
     except Exception as e:
         return None, None, None, None, str(e)
+
 
 
 # =========================================================
@@ -531,7 +566,7 @@ def tech_access(qr_id):
         )
 
     # --- AUTORISÉ => retourner PIN ---
-    pin, pin_id, s, e, err = get_current_pin_only(kb)
+    pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
         return render_template_string(
@@ -1039,6 +1074,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
