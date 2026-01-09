@@ -442,11 +442,10 @@ def tech_access(qr_id):
     bat = f.get("Batiment", "")
     ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
 
-    # GET = afficher formulaire
     if request.method == "GET":
         return render_template_string(HTML_TECH_FORM, batiment=bat)
 
-    # POST = anti-spam
+    # ⚠️ IMPORTANT: pas de "@app.route" dans les arguments, juste window_sec
     if not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600):
         return render_template_string(
             HTML_TECH_RESULT,
@@ -455,7 +454,6 @@ def tech_access(qr_id):
             detail="Réessayez dans quelques minutes."
         )
 
-    # POST = infos technicien
     first = (request.form.get("first") or "").strip()
     last = (request.form.get("last") or "").strip()
     company = (request.form.get("company") or "").strip()
@@ -465,37 +463,57 @@ def tech_access(qr_id):
     allowed, reason, _user = is_user_allowed(qr_id, email=email, phone=phone)
 
     # --- NON AUTORISÉ => créer demande gérance + refuser ---
-if not allowed:
-    detail = reason
+    if not allowed:
+        detail = reason
 
-    if (reason == "Utilisateur non enregistré."
-        or reason == "Aucune permission active pour cette boîte."
-        or "status=pending" in reason):
+        if (reason == "Utilisateur non enregistré."
+            or reason == "Aucune permission active pour cette boîte."
+            or "status=pending" in reason):
 
-        try:
-            client = f.get("Client", "")
+            try:
+                client = f.get("Client", "")
 
-            # si inconnu -> user pending
-            if reason == "Utilisateur non enregistré.":
-                upsert_user(first, last, company, email, phone, status="pending")
+                # si inconnu -> user pending
+                if reason == "Utilisateur non enregistré.":
+                    upsert_user(first, last, company, email, phone, status="pending")
 
-            # si déjà pending -> créer la Request si elle n'existe pas déjà
-            existing = find_pending_request(qr_id, email, phone)
-            if existing:
-                detail = f"Demande déjà en attente de validation. (ID={existing.get('id')})"
-            else:
-                req = create_request(client, qr_id, first, last, company, email, phone)
-                detail = f"Demande envoyée à la gérance. (ID={req.get('id')})"
+                existing = find_pending_request(qr_id, email, phone)
+                if existing:
+                    detail = f"Demande déjà en attente de validation. (ID={existing.get('id')})"
+                else:
+                    req = create_request(client, qr_id, first, last, company, email, phone)
+                    detail = f"Demande envoyée à la gérance. (ID={req.get('id')})"
 
-        except Exception as e:
-            detail = f"Impossible de créer la demande: {e}"
+            except Exception as e:
+                detail = f"Impossible de créer la demande: {e}"
 
-    log_access(qr_id, first, last, company, channel="none", error=reason)
+        log_access(qr_id, first, last, company, channel="none", error=reason)
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Accès refusé",
+            detail=detail
+        )
+
+    # --- AUTORISÉ => retourner PIN ---
+    pin, pin_id, s, e, err = get_current_pin_only(kb)
+    if err:
+        log_access(qr_id, first, last, company, channel="none", error=err)
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Service indisponible",
+            detail=err
+        )
+
+    detail = f"Valide: {s} → {e}"
+    log_access(qr_id, first, last, company, channel="screen", pin_id=pin_id, start=s, end=e, error="")
     return render_template_string(
         HTML_TECH_RESULT,
-        ok=False,
-        msg="Accès refusé",
-        detail=detail
+        ok=True,
+        msg="Code prêt",
+        detail=detail,
+        pin=pin
     )
 
 # --- GERANCE LOGIN ---
@@ -986,6 +1004,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
