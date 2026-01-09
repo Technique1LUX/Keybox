@@ -44,7 +44,7 @@ def now_lu():
 def iso(dt: datetime) -> str:
     return dt.astimezone(TZ).isoformat(timespec="seconds")
 
-ddef parse_iso(s: str):
+def parse_iso(s: str):
     try:
         dt = datetime.fromisoformat(s)
         if dt.tzinfo is None:
@@ -1053,6 +1053,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
