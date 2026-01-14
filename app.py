@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_only_change_me")
 
-APP_TZ = ZoneInfo("Europe/Luxembourg")
+TZ = ZoneInfo("Europe/Luxembourg")
 
 VERIFY_SSL = os.getenv("VERIFY_SSL", "true").lower() == "true"
 PIN_DURATION_HOURS = int(os.getenv("PIN_DURATION_HOURS", "4"))
@@ -39,7 +39,7 @@ _rl = {}
 
 # ------------------ Time helpers ------------------
 def now_lu():
-    return datetime.now(TZ)
+    return datetime.now()
 
 def iso(dt: datetime) -> str:
     return dt.astimezone(TZ).isoformat(timespec="seconds")
@@ -200,8 +200,8 @@ def igloo_create_hourly_pin(kb, start_dt: datetime, end_dt: datetime):
         url = f"https://api.igloodeveloper.co/igloohome/devices/{device_id}/algopin/hourly"
 
                 # force timezone Luxembourg + arrondi propre
-        start_dt = start_dt.astimezone(APP_TZ).replace(minute=0, second=0, microsecond=0)
-        end_dt = end_dt.astimezone(APP_TZ).replace(minute=0, second=0, microsecond=0)
+        start_dt = start_dt.astimezone(TZ).replace(minute=0, second=0, microsecond=0)
+        end_dt = end_dt.astimezone(TZ).replace(minute=0, second=0, microsecond=0)
 
         payload = {
             "variance": int(kb.get("fields", {}).get("VarianceHourly", 1)),
@@ -355,7 +355,7 @@ def gerance_can_access_qr(qrid: str) -> bool:
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-APP_TZ = ZoneInfo("Europe/Luxembourg")
+TZ = ZoneInfo("Europe/Luxembourg")
 
 def ensure_active_or_next_pin(kb):
     """
@@ -1055,6 +1055,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
