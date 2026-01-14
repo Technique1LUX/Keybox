@@ -430,25 +430,27 @@ def ensure_active_or_next_pin(kb):
             and f.get("NextEnd") == next_end_iso
         )
 
-        if not next_ok:
-            pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
-            if not err2:
-                at_update(T_KEYBOXES, kb["id"], {
-                    "NextPin": pin2,
-                    "NextPinId": pin2_id,
-                    "NextStart": next_start_iso,
-                    "NextEnd": next_end_iso,
-                })
-                
-print("PIN_DEBUG now=", now.isoformat(), "cur=", cur_start_iso, cur_end_iso,
-      "Active=", f.get("ActiveStart"), f.get("ActiveEnd"),
-      "Next=", f.get("NextStart"), f.get("NextEnd"))
+            if not next_ok:
+        pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
+        if not err2:
+            at_update(T_KEYBOXES, kb["id"], {
+                "NextPin": pin2,
+                "NextPinId": pin2_id,
+                "NextStart": next_start_iso,
+                "NextEnd": next_end_iso,
+            })
 
-        return f["ActivePin"], f.get("ActivePinId"), f.get("ActiveStart"), f.get("ActiveEnd"), None
+    # ✅ reste dans le try
+    print(
+        "PIN_DEBUG now=", now.isoformat(), "cur=", cur_start_iso, cur_end_iso,
+        "Active=", f.get("ActiveStart"), f.get("ActiveEnd"),
+        "Next=", f.get("NextStart"), f.get("NextEnd")
+    )
 
-    except Exception as e:
-        return None, None, None, None, str(e)
+    return f["ActivePin"], f.get("ActivePinId"), f.get("ActiveStart"), f.get("ActiveEnd"), None
 
+except Exception as e:
+    return None, None, None, None, str(e)
 
 
 # =========================================================
@@ -1053,6 +1055,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
