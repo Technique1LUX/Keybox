@@ -39,9 +39,11 @@ _rl = {}
 
 # ------------------ Time helpers ------------------
 def now_lu():
-    return datetime.now()
+    return datetime.now(TZ)
 
 def iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TZ)
     return dt.astimezone(TZ).isoformat(timespec="seconds")
 
 def parse_iso(s: str):
@@ -52,6 +54,14 @@ def parse_iso(s: str):
         return dt
     except Exception:
         return None
+
+def is_active_window(start_iso: str, end_iso: str) -> bool:
+    s = parse_iso(start_iso) if start_iso else None
+    e = parse_iso(end_iso) if end_iso else None
+    if not s or not e:
+        return False
+    now = now_lu()
+    return s <= now < e
 
 def round_down_hour(dt: datetime) -> datetime:
     dt = dt.astimezone(TZ)
@@ -123,6 +133,17 @@ def at_get(table: str, formula: str = "", max_records: int = 50):
     r = requests.get(at_url(table), headers=at_headers(), params=params, timeout=20, verify=VERIFY_SSL)
     r.raise_for_status()
     return r.json().get("records", [])
+    
+def at_read(table: str, record_id: str):
+    r = requests.get(
+        f"{at_url(table)}/{record_id}",
+        headers=at_headers(),
+        timeout=20,
+        verify=VERIFY_SSL
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"Airtable read failed {r.status_code}: {r.text}")
+    return r.json()
 
 def at_create(table: str, fields: dict):
     r = requests.post(
@@ -154,8 +175,9 @@ def get_oauth_token() -> str:
     if _token_cache["token"] and now_ts < (_token_cache["exp"] - 120):
         return _token_cache["token"]
 
-    if not CLIENT_ID or not IGLOO_CLIENT_SECRET:
-        raise RuntimeError("IGLOO_CLIENT_ID / IGLOO_CLIENT_SECRET manquants (env).")
+   if not IGLOO_CLIENT_ID or not IGLOO_CLIENT_SECRET:
+    raise RuntimeError("IGLOO_CLIENT_ID / IGLOO_CLIENT_SECRET manquants (env).")
+
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -196,7 +218,7 @@ def igloo_create_hourly_pin(kb, start_dt: datetime, end_dt: datetime):
         if not device_id:
             return None, None, "DeviceId manquant"
 
-        token = get_token()  # ta fonction existante OAuth (Bearer)
+        token = token = get_oauth_token()  # ta fonction existante OAuth (Bearer)
         url = f"https://api.igloodeveloper.co/igloohome/devices/{device_id}/algopin/hourly"
 
                 # force timezone Luxembourg + arrondi propre
@@ -283,6 +305,19 @@ def create_permission(qrid: str, email: str, phone: str, active=True):
         "Active": bool(active)
     }
     return at_create(T_PERMS, fields)
+    
+def create_request(client: str, qrid: str, first: str, last: str, company: str, email: str, phone: str):
+    return at_create(T_REQUESTS, {
+        "Client": client or "",
+        "QRID": qrid or "",
+        "FirstName": first or "",
+        "LastName": last or "",
+        "Company": company or "",
+        "Email": norm_email(email),
+        "Phone": norm_phone(phone),
+        "Status": "pending",
+        "CreatedAt": iso(now_lu()),
+    })
 
 def set_permission_active(perm_record_id: str, active: bool):
     return at_update(T_PERMS, perm_record_id, {"Active": bool(active)})
@@ -352,9 +387,6 @@ def gerance_can_access_qr(qrid: str) -> bool:
         return False
     return (kb.get("fields", {}).get("Client") == session.get("client"))
 
-from datetime import timedelta
-from zoneinfo import ZoneInfo
-
 TZ = ZoneInfo("Europe/Luxembourg")
 
 def ensure_active_or_next_pin(kb):
@@ -418,7 +450,7 @@ def ensure_active_or_next_pin(kb):
             f["ActiveStart"] = cur_start_iso
             f["ActiveEnd"] = cur_end_iso
 
-                # 2) Préparer NextPin (heure suivante)
+        # 2) Préparer NextPin (heure suivante)
         next_start = cur_end
         next_end = next_start + timedelta(hours=1)
         next_start_iso = iso(next_start)
@@ -1055,6 +1087,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
