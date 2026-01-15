@@ -24,6 +24,11 @@ T_PERMS = os.getenv("AIRTABLE_TABLE_PERMISSIONS", "Permissions")
 T_LOG = os.getenv("AIRTABLE_TABLE_ACCESSLOG", "AccessLog")
 T_REQUESTS = os.getenv("AIRTABLE_TABLE_REQUESTS", "Requests")
 
+print("AIRTABLE_BASE_ID =", AIRTABLE_BASE_ID)
+print("T_LOG =", T_LOG)
+print("AIRTABLE_API_KEY prefix =", (AIRTABLE_API_KEY or "")[:6])
+
+
 # Igloo
 IGLOO_CLIENT_ID = os.getenv("IGLOO_CLIENT_ID")
 IGLOO_CLIENT_SECRET = os.getenv("IGLOO_CLIENT_SECRET")
@@ -1162,6 +1167,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
