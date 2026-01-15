@@ -175,14 +175,13 @@ def get_oauth_token() -> str:
     if _token_cache["token"] and now_ts < (_token_cache["exp"] - 120):
         return _token_cache["token"]
 
-   if not IGLOO_CLIENT_ID or not IGLOO_CLIENT_SECRET:
-    raise RuntimeError("IGLOO_CLIENT_ID / IGLOO_CLIENT_SECRET manquants (env).")
-
+    if not IGLOO_CLIENT_ID or not IGLOO_CLIENT_SECRET:
+        raise RuntimeError("IGLOO_CLIENT_ID / IGLOO_CLIENT_SECRET manquants (env).")
 
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
         "Accept": "application/json",
-        "User-Agent": "curl/8.0"
+        "User-Agent": "keybox/1.0",
     }
 
     r = requests.post(
@@ -191,7 +190,7 @@ def get_oauth_token() -> str:
         headers=headers,
         data="grant_type=client_credentials",
         timeout=20,
-        verify=VERIFY_SSL
+        verify=VERIFY_SSL,
     )
     if r.status_code != 200:
         raise RuntimeError(f"OAuth failed {r.status_code}: {r.text}")
@@ -1087,6 +1086,7 @@ HTML_ADMIN = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
