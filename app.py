@@ -2,11 +2,24 @@ import os
 import time
 import requests
 import traceback
+import logging
+from threading import Lock
+from functools import wraps
+from secrets import token_urlsafe
 from flask import Flask, render_template_string, request, session, jsonify, redirect, url_for
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+logger = logging.getLogger("keybox")
+
+app.config.update(
+    SESSION_COOKIE_SECURE=True,      # OK sur Render (https)
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev_only_change_me")
 
 TZ = ZoneInfo("Europe/Luxembourg")
@@ -41,6 +54,14 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "change_me")
 # token cache + rate limit in memory
 _token_cache = {"token": None, "exp": 0}
 _rl = {}
+
+_qr_locks = {}
+
+def _get_lock(qrid: str) -> Lock:
+    if qrid not in _qr_locks:
+        _qr_locks[qrid] = Lock()
+    return _qr_locks[qrid]
+
 
 # ------------------ Time helpers ------------------
 def now_lu():
@@ -385,6 +406,57 @@ def log_access(qrid: str, first: str, last: str, company: str, channel: str,
         })
     except Exception as e:
         print("LOG_ACCESS FAILED:", str(e))
+def csrf_get_token() -> str:
+    tok = session.get("_csrf")
+    if not tok:
+        tok = token_urlsafe(32)
+        session["_csrf"] = tok
+    return tok
+
+def csrf_input() -> str:
+    return f'<input type="hidden" name="csrf" value="{csrf_get_token()}">'
+
+def csrf_check():
+    sent = request.form.get("csrf", "")
+    expected = session.get("_csrf", "")
+    if not expected or not sent or sent != expected:
+        return False
+    return True
+
+def require_csrf(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if request.method == "POST":
+            if not csrf_check():
+                return "CSRF invalid", 403
+        return fn(*args, **kwargs)
+    return wrapper
+ from secrets import token_urlsafe
+from functools import wraps
+
+def csrf_get_token() -> str:
+    tok = session.get("_csrf")
+    if not tok:
+        tok = token_urlsafe(32)
+        session["_csrf"] = tok
+    return tok
+
+def csrf_input() -> str:
+    return f'<input type="hidden" name="csrf" value="{csrf_get_token()}">'
+
+def csrf_check() -> bool:
+    sent = (request.form.get("csrf") or "").strip()
+    expected = (session.get("_csrf") or "").strip()
+    return bool(sent) and bool(expected) and sent == expected
+
+def require_csrf(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        if request.method == "POST" and not csrf_check():
+            return "CSRF invalid", 403
+        return fn(*args, **kwargs)
+    return wrapper
+  
 
 # ------------------ Keyboxes ------------------
 def get_keybox_by_qr(qrid: str):
@@ -533,6 +605,7 @@ def home():
 
 # --- TECH QR ---
 @app.route("/access/<qr_id>", methods=["GET", "POST"])
+@require_csrf
 def tech_access(qr_id):
     kb = get_keybox_by_qr(qr_id)
     if not kb:
@@ -596,6 +669,7 @@ def tech_access(qr_id):
         )
 
     # --- AUTORISÉ => retourner PIN ---
+    with _get_lock(qr_id):   # ou qr_id / qr_id variable de ta route
     pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
@@ -657,10 +731,11 @@ def gerance_portal():
             "Err": err
         })
 
-    return render_template_string(HTML_GERANCE, rows=rows)
+    return render_template_string(HTML_GERANCE, rows=rows, csrf=csrf_input())
 
 # API: afficher code d'urgence (session gérance)
 @app.route("/api/emergency/<qr_id>")
+@require_csrf
 def api_emergency(qr_id):
     if not gerance_can_access_qr(qr_id):
         return jsonify({"error": "unauthorized"}), 401
@@ -674,6 +749,7 @@ def api_emergency(qr_id):
 
 # Gerance: set emergency code
 @app.route("/gerance/keybox/<qr_id>/set_emergency", methods=["POST"])
+@require_csrf
 def set_emergency(qr_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
@@ -722,11 +798,16 @@ def gerance_keybox(qr_id):
             "status": uf.get("Status","") if user else "unknown"
         })
 
-    return render_template_string(HTML_KEYBOX, qr_id=qr_id, batiment=bat,
-                                  emergency=(kf.get("EmergencyCode") or ""),
-                                  perms=perm_rows)
+    return render_template_string(
+    HTML_KEYBOX,
+    qr_id=qr_id, batiment=batiment,
+    emergency=(kf.get("EmergencyCode") or ""),
+    perms=perm_rows,
+    csrf=csrf_input()
+)
 
 @app.route("/gerance/keybox/<qr_id>/add_user", methods=["POST"])
+@require_csrf
 def gerance_add_user(qr_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
@@ -752,6 +833,7 @@ def gerance_add_user(qr_id):
         return f"Erreur création utilisateur: {e}", 500
 
 @app.route("/gerance/perm/<perm_id>/toggle", methods=["POST"])
+@require_csrf
 def gerance_toggle_perm(perm_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
@@ -793,10 +875,11 @@ def gerance_requests():
     # 3) Filtre côté serveur pour ne garder que les QRID de ce client
     reqs = [r for r in reqs if (r.get("fields", {}) or {}).get("QRID") in qrids]
 
-    return render_template_string(HTML_REQUESTS, reqs=reqs, client=client)
+    return render_template_string(HTML_REQUESTS, reqs=reqs, client=client, csrf=csrf_input())
 
     
 @app.route("/gerance/requests/<req_id>/approve", methods=["POST"])
+@require_csrf
 def gerance_approve_request(req_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
@@ -820,6 +903,7 @@ def gerance_approve_request(req_id):
     return redirect(url_for("gerance_requests"))
     
 @app.route("/gerance/requests/<req_id>/deny", methods=["POST"])
+@require_csrf
 def gerance_deny_request(req_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
@@ -845,7 +929,8 @@ def prefill():
     for kb in keyboxes:
         qr = kb.get("fields", {}).get("QRID", "")
         try:
-            pin, pid, s, e, err = ensure_active_or_next_pin(kb)
+            with _get_lock(qr_id):
+            pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
             out["results"].append({"qrid": qr, "start": s, "end": e, "error": err})
             if err:
                 out["err"] += 1
@@ -885,7 +970,15 @@ def gerance_logs():
     logs = logs[:200]
 
     return render_template_string(HTML_LOGS, logs=logs, client=client)
-
+    
+@app.after_request
+def security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline'"
+    return resp
+    
 # ------------------ HTML ------------------
 HTML_LOGIN = """
 <body style="font-family:sans-serif; background:#f4f7f9; display:flex; justify-content:center; padding-top:100px;">
@@ -982,6 +1075,7 @@ HTML_KEYBOX = """
 
     <h3>Code d’urgence</h3>
     <form method="post" action="/gerance/keybox/{{qr_id}}/set_emergency" style="display:flex;gap:10px;align-items:center;">
+       {{csrf|safe}} 
       <input name="code" value="{{emergency}}" placeholder="EmergencyCode" style="flex:1;padding:10px;border-radius:10px;border:1px solid #ddd;">
       <button style="padding:10px 14px;border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:700;cursor:pointer;">Enregistrer</button>
     </form>
@@ -989,6 +1083,7 @@ HTML_KEYBOX = """
 
     <h3>Ajouter un utilisateur autorisé</h3>
     <form method="post" action="/gerance/keybox/{{qr_id}}/add_user" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        {{csrf|safe}}
       <input name="first" placeholder="Prénom" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
       <input name="last" placeholder="Nom" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
       <input name="company" placeholder="Entreprise" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
@@ -1018,6 +1113,7 @@ HTML_KEYBOX = """
         <td style="padding:10px;">{{p.status}}</td>
         <td style="padding:10px;">
           <form method="post" action="/gerance/perm/{{p.perm_id}}/toggle">
+            {{csrf|safe}}
             <input type="hidden" name="back" value="/gerance/keybox/{{qr_id}}">
             <select name="active" onchange="this.form.submit()" style="padding:6px;border-radius:8px;">
               <option value="1" {% if p.active %}selected{% endif %}>ON</option>
@@ -1097,9 +1193,11 @@ HTML_REQUESTS = """
             <td style="padding:10px;">{{f.get('Phone','')}}</td>
             <td style="padding:10px;display:flex;gap:8px;">
               <form method="post" action="/gerance/requests/{{r['id']}}/approve">
+              {{csrf|safe}}
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#22c55e;color:white;font-weight:700;cursor:pointer;">Valider</button>
               </form>
               <form method="post" action="/gerance/requests/{{r['id']}}/deny">
+              {{csrf|safe}}
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#ef4444;color:white;font-weight:700;cursor:pointer;">Refuser</button>
               </form>
             </td>
@@ -1173,6 +1271,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
