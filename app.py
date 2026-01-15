@@ -134,6 +134,19 @@ def at_get(table: str, formula: str = "", max_records: int = 50):
     r.raise_for_status()
     return r.json().get("records", [])
     
+def at_get_sorted(table: str, formula: str = "", max_records: int = 50, sort_field: str = "Timestamp", direction: str = "desc"):
+    params = {
+        "maxRecords": max_records,
+        "sort[0][field]": sort_field,
+        "sort[0][direction]": direction
+    }
+    if formula:
+        params["filterByFormula"] = formula
+    r = requests.get(at_url(table), headers=at_headers(), params=params, timeout=20, verify=VERIFY_SSL)
+    r.raise_for_status()
+    return r.json().get("records", [])
+    
+    
 def at_read(table: str, record_id: str):
     r = requests.get(
         f"{at_url(table)}/{record_id}",
@@ -838,6 +851,35 @@ def prefill():
             out["err"] += 1
 
     return jsonify(out)
+    
+@app.route("/gerance/logs")
+def gerance_logs():
+    if session.get("role") != "gerance":
+        return redirect(url_for("login"))
+
+    client = session.get("client") or ""
+
+    # QRID autorisés
+    keyboxes = get_keyboxes_for_client(client)
+    qrids = { (kb.get("fields", {}) or {}).get("QRID") for kb in keyboxes }
+    qrids.discard(None)
+    qrids.discard("")
+
+    # On récupère large puis on filtre "succès" (code délivré)
+    logs = at_get_sorted(T_LOG, max_records=300, sort_field="Timestamp", direction="desc") or []
+
+    def is_success(rec):
+        f = (rec.get("fields", {}) or {})
+        if f.get("QRID") not in qrids:
+            return False
+        if (f.get("Channel") or "") != "screen":
+            return False
+        return (f.get("Error") or "").strip() == ""
+
+    logs = [r for r in logs if is_success(r)]
+    logs = logs[:200]
+
+    return render_template_string(HTML_LOGS, logs=logs, client=client)
 
 # ------------------ HTML ------------------
 HTML_LOGIN = """
@@ -1084,8 +1126,43 @@ HTML_ADMIN = """
 </body>
 """
 
+HTML_LOGS = """
+<body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
+  <div style="max-width:1200px;margin:auto;background:white;padding:24px;border-radius:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
+    <a href="/gerance" style="text-decoration:none;color:#2563eb;">← Retour</a>
+    <h2 style="color:#2563eb;margin-top:10px;">Codes délivrés — {{client}}</h2>
+    <p style="opacity:.7;margin:6px 0 14px;font-size:12px;">Uniquement les accès réussis (code affiché).</p>
+
+    <table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;">
+      <tr style="text-align:left;border-bottom:1px solid #eee;background:#f8fafc;">
+        <th style="padding:10px;">Quand</th>
+        <th style="padding:10px;">QRID</th>
+        <th style="padding:10px;">Nom</th>
+        <th style="padding:10px;">Entreprise</th>
+        <th style="padding:10px;">Fenêtre</th>
+        <th style="padding:10px;">PinId</th>
+      </tr>
+
+      {% for r in logs %}
+        {% set f = r.get('fields', {}) %}
+        <tr style="border-bottom:1px solid #f1f5f9;">
+          <td style="padding:10px;">{{f.get('Timestamp','')}}</td>
+          <td style="padding:10px;">{{f.get('QRID','')}}</td>
+          <td style="padding:10px;">{{f.get('FirstName','')}} {{f.get('LastName','')}}</td>
+          <td style="padding:10px;">{{f.get('Company','')}}</td>
+          <td style="padding:10px;">{{f.get('Start','')}} → {{f.get('End','')}}</td>
+          <td style="padding:10px;">{{f.get('PinId','')}}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  </div>
+</body>
+"""
+
+
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
