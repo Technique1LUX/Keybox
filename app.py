@@ -378,8 +378,8 @@ def log_access(qrid: str, first: str, last: str, company: str, channel: str,
             "End": end or "",
             "Error": error or ""
         })
-    except Exception:
-        pass
+    except Exception as e:
+    print("LOG_ACCESS FAILED:", str(e))
 
 # ------------------ Keyboxes ------------------
 def get_keybox_by_qr(qrid: str):
@@ -1162,6 +1162,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
