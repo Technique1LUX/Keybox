@@ -947,6 +947,12 @@ HTML_GERANCE = """
     Demandes en attente
   </button>
 </a>
+        <a href="/gerance/logs" style="text-decoration:none;">
+  <button style="padding:10px 12px;border:0;border-radius:10px;background:#334155;color:white;font-weight:800;cursor:pointer;">
+    Logs d'accès
+  </button>
+</a>
+
         </td>
       </tr>
       {% endfor %}
@@ -1167,6 +1173,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
