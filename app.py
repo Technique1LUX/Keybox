@@ -264,8 +264,8 @@ def norm_email(e: str) -> str:
     return (e or "").strip().lower()
 
 def find_user(email: str, phone: str):
-    email = norm_email(email)
-    phone = norm_phone(phone)
+    email = at_escape(norm_email(email))
+    phone = at_escape(norm_phone(phone))
     parts = []
     if email:
         parts.append(f"{{Email}}='{email}'")
@@ -314,8 +314,9 @@ def create_request(client: str, qrid: str, first: str, last: str, company: str, 
     })
 
 def is_user_allowed(qrid: str, email: str, phone: str):
-    email = norm_email(email)
-    phone = norm_phone(phone)
+    email = at_escape(norm_email(email))
+    phone = at_escape(norm_phone(phone))
+    qrid = at_escape(qrid)
 
     user = find_user(email, phone)
     if not user:
@@ -341,6 +342,12 @@ def is_user_allowed(qrid: str, email: str, phone: str):
         return False, "Aucune permission active pour cette boîte.", user
 
     return True, None, user
+
+def at_escape(s: str) -> str:
+    # Airtable formule: string entre quotes simples
+    # On échappe les backslashes + quotes simples
+    return (s or "").replace("\\", "\\\\").replace("'", "\\'")
+
 
 def log_access(qrid: str, first: str, last: str, company: str, channel: str,
                pin_id: str = "", start: str = "", end: str = "", error: str = ""):
@@ -1130,6 +1137,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
