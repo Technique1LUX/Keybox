@@ -928,7 +928,7 @@ def prefill():
         qr = kb.get("fields", {}).get("QRID", "")
         try:
             with _get_lock(qr_id):
-            pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
+                pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
             out["results"].append({"qrid": qr, "start": s, "end": e, "error": err})
             if err:
                 out["err"] += 1
@@ -1269,6 +1269,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
