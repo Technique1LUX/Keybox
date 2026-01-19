@@ -522,11 +522,13 @@ def tech_access(qr_id):
 
     if not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600):
         return render_template_string(
-            HTML_TECH_RESULT,
-            ok=False,
-            msg="Trop de demandes",
-            detail="Réessayez dans quelques minutes.",
+        return render_template_string(
+            HTML_PENDING,
+            qr_id=qr_id,
+            email=email,
+            phone=phone
         )
+
 
     first = (request.form.get("first") or "").strip()
     last = (request.form.get("last") or "").strip()
@@ -746,6 +748,22 @@ def gerance_requests():
     reqs = [r for r in reqs if (r.get("fields", {}) or {}).get("QRID") in qrids]
 
     return render_template_string(HTML_REQUESTS, reqs=reqs, client=client, csrf=csrf_input())
+
+@app.route("/api/request_status/<qr_id>")
+def api_request_status(qr_id):
+    email = norm_email(request.args.get("email", ""))
+    phone = norm_phone(request.args.get("phone", ""))
+
+    allowed, reason, _ = is_user_allowed(qr_id, email=email, phone=phone)
+    if allowed:
+        return jsonify({"status": "approved"})
+
+    pending = find_pending_request(qr_id, email, phone)
+    if pending:
+        return jsonify({"status": "pending"})
+
+    return jsonify({"status": "denied", "reason": reason})
+
 
 @app.route("/gerance/requests/<req_id>/approve", methods=["POST"])
 @require_csrf
@@ -1102,6 +1120,40 @@ HTML_ADMIN = """
 </body>
 """
 
+HTML_PENDING = """
+<body style="font-family:sans-serif;background:#0f172a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
+  <div style="width:520px;background:#111827;padding:24px;border-radius:16px;text-align:center;">
+    <h2 style="color:#fbbf24;margin:0 0 8px;">Demande en attente</h2>
+    <p style="opacity:.85;margin:0;">La gérance doit valider votre accès…</p>
+    <p id="st" style="opacity:.7;font-size:12px;margin-top:12px;">Vérification automatique…</p>
+
+    <script>
+      const qr = "{{qr_id}}";
+      const email = encodeURIComponent("{{email}}");
+      const phone = encodeURIComponent("{{phone}}");
+
+      async function tick(){
+        const r = await fetch(`/api/request_status/${qr}?email=${email}&phone=${phone}`);
+        const j = await r.json();
+
+        if(j.status === "approved"){
+          document.getElementById("st").innerText = "Validé ✅ Redirection…";
+          window.location.href = `/access/${qr}`;
+          return;
+        }
+        if(j.status === "denied"){
+          document.getElementById("st").innerText = "Refusé ❌";
+          return;
+        }
+        setTimeout(tick, 3000);
+      }
+      tick();
+    </script>
+  </div>
+</body>
+"""
+
+
 HTML_LOGS = """
 <body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
   <div style="max-width:1200px;margin:auto;background:white;padding:24px;border-radius:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
@@ -1137,6 +1189,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
