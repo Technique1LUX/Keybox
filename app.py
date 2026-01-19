@@ -667,8 +667,8 @@ def tech_access(qr_id):
         )
 
     # --- AUTORISÉ => retourner PIN ---
-    with _get_lock(qr_id):   # ou qr_id / qr_id variable de ta route
-    pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
+        with _get_lock(qr_id):   # ou qr_id / qr_id variable de ta route
+        pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
         return render_template_string(
@@ -1269,6 +1269,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
