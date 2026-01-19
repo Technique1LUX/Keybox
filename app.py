@@ -558,11 +558,16 @@ def tech_access(qr_id):
                 detail = f"Impossible de créer la demande: {e}"
 
         log_access(qr_id, first, last, company, channel="none", error=reason)
+                # ... après avoir créé/confirmé la demande pending
         return render_template_string(
-            HTML_TECH_RESULT,
-            ok=False,
-            msg="Accès refusé",
-            detail=detail
+            HTML_PENDING,
+            qr_id=qr_id,
+            first=first,
+            last=last,
+            company=company,
+            email=email,
+            phone=phone,
+            csrf=csrf_input(),
         )
 
     # IMPORTANT: re-fetch pour avoir la dernière version avant lock
@@ -1155,6 +1160,60 @@ HTML_PENDING = """
   </div>
 </body>
 """
+HTML_PENDING = """
+<body style="font-family:sans-serif;background:#0f172a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
+  <div style="width:520px;background:#111827;padding:24px;border-radius:16px;text-align:center;">
+    <h2 style="color:#fbbf24;margin:0 0 8px;">Demande en attente</h2>
+    <p style="opacity:.85;margin:0 0 14px;">
+      La gérance doit valider l’accès. Cette page se met à jour automatiquement.
+    </p>
+
+    <div id="status" style="opacity:.85;font-size:13px;">Vérification…</div>
+
+    <form id="autoForm" method="post" action="/access/{{qr_id}}" style="display:none;">
+      {{csrf|safe}}
+      <input type="hidden" name="first" value="{{first}}">
+      <input type="hidden" name="last" value="{{last}}">
+      <input type="hidden" name="company" value="{{company}}">
+      <input type="hidden" name="email" value="{{email}}">
+      <input type="hidden" name="phone" value="{{phone}}">
+    </form>
+
+    <script>
+      const qrId = "{{qr_id}}";
+      const email = encodeURIComponent("{{email}}");
+      const phone = encodeURIComponent("{{phone}}");
+      const statusEl = document.getElementById("status");
+      const form = document.getElementById("autoForm");
+
+      async function check(){
+        try{
+          const r = await fetch(`/api/request_status/${qrId}?email=${email}&phone=${phone}`);
+          const d = await r.json();
+
+          if(d.status === "approved"){
+            statusEl.innerText = "✅ Accès validé — récupération du code…";
+            form.submit(); // <- recharge la page avec le code
+            return;
+          }
+
+          if(d.status === "pending"){
+            statusEl.innerText = "⏳ Toujours en attente…";
+            return;
+          }
+
+          statusEl.innerText = "❌ Demande refusée ou introuvable.";
+        }catch(e){
+          statusEl.innerText = "Erreur réseau, nouvelle tentative…";
+        }
+      }
+
+      check();
+      setInterval(check, 3000); // toutes les 3s
+    </script>
+  </div>
+</body>
+"""
 
 
 HTML_LOGS = """
@@ -1192,6 +1251,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
