@@ -560,7 +560,12 @@ def tech_access(qr_id):
                 detail = f"Impossible de créer la demande: {e}"
 
         log_access(qr_id, first, last, company, channel="none", error=reason)
-        return render_template_string(HTML_TECH_RESULT, ok=False, msg="Accès refusé", detail=detail)
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Accès refusé",
+            detail=detail
+        )
 
     # IMPORTANT: re-fetch pour avoir la dernière version avant lock
     kb = get_keybox_by_qr(qr_id)
@@ -679,13 +684,13 @@ def gerance_keybox(qr_id):
         })
 
     return render_template_string(
-        HTML_KEYBOX,
-        qr_id=qr_id,
-        batiment=bat,
-        emergency=(kf.get("EmergencyCode") or ""),
-        perms=perm_rows,
-        csrf=csrf_input(),
-    )
+    HTML_KEYBOX,
+    qr_id=qr_id, batiment=bat,
+    emergency=(kf.get("EmergencyCode") or ""),
+    perms=perm_rows,
+    csrf=csrf_input()
+)
+
 
 @app.route("/gerance/keybox/<qr_id>/add_user", methods=["POST"])
 @require_csrf
@@ -1189,6 +1194,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
