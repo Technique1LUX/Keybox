@@ -667,7 +667,7 @@ def tech_access(qr_id):
         )
 
     # --- AUTORISÉ => retourner PIN ---
-        with _get_lock(qr_id):   # ou qr_id / qr_id variable de ta route
+    with _get_lock(qr_id):   # ou qr_id / qr_id variable de ta route
         pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
     if err:
         log_access(qr_id, first, last, company, channel="none", error=err)
