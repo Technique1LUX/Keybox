@@ -521,14 +521,12 @@ def tech_access(qr_id):
         return render_template_string(HTML_TECH_FORM, batiment=bat, csrf=csrf_input())
 
     if not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600):
-        return render_template_string(
-        return render_template_string(
-            HTML_PENDING,
-            qr_id=qr_id,
-            email=email,
-            phone=phone
-        )
-
+    return render_template_string(
+        HTML_TECH_RESULT,
+        ok=False,
+        msg="Trop de demandes",
+        detail="Réessayez dans quelques minutes."
+    )
 
     first = (request.form.get("first") or "").strip()
     last = (request.form.get("last") or "").strip()
@@ -1194,6 +1192,10 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
+
+
+
 
 
 
