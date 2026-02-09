@@ -9,6 +9,7 @@ from flask import Flask, render_template_string, request, session, jsonify, redi
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from db import q, q1, exec_sql
+from flask import g
 
 
 # =========================================================
@@ -59,6 +60,29 @@ def _get_lock(qrid: str) -> Lock:
     if qrid not in _qr_locks:
         _qr_locks[qrid] = Lock()
     return _qr_locks[qrid]
+def tenant_from_host():
+    host = (request.headers.get("X-Forwarded-Host") or request.host).split(":")[0]
+    parts = host.split(".")
+    if len(parts) >= 3 and parts[0] not in ("www", "app"):
+        return parts[0].lower()
+    return (request.args.get("tenant") or "").lower()
+
+@app.before_request
+def load_tenant():
+    slug = tenant_from_host()
+    if not slug:
+        g.tenant_id = None
+        return
+
+    t = q1(
+        "select id, slug from tenants where slug=%s and status='active'",
+        (slug,)
+    )
+    if not t:
+        g.tenant_id = None
+        return
+
+    g.tenant_id = t["id"]
 
 # =========================================================
 # Time helpers
@@ -1253,6 +1277,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
