@@ -646,7 +646,9 @@ def login():
 @app.route("/_debug_db")
 def _debug_db():
     return jsonify({
+        "MARKER": "DEBUG_DB_V2",
         "tenant_param": request.args.get("tenant"),
+        "tenant_slug": getattr(g, "tenant_slug", None),
         "tenant_id": getattr(g, "tenant_id", None),
         "db": q1("select current_database() as db, current_user as usr"),
         "tenants": q("select id, slug, status from tenants order by id"),
@@ -1317,6 +1319,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
