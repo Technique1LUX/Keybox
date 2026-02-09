@@ -627,6 +627,15 @@ def login():
             return redirect(url_for("gerance_portal"))
         return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
     return render_template_string(HTML_LOGIN)
+@app.route("/_debug_db")
+def _debug_db():
+    return jsonify({
+        "tenant_param": request.args.get("tenant"),
+        "tenant_id": getattr(g, "tenant_id", None),
+        "db": q1("select current_database() as db, current_user as usr"),
+        "tenants": q("select id, slug, status from tenants order by id"),
+        "keyboxes": q("select tenant_id, qrid, enabled from keyboxes order by id desc limit 20"),
+    })
 
 @app.route("/gerance")
 def gerance_portal():
@@ -1292,6 +1301,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
