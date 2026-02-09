@@ -683,6 +683,16 @@ def set_emergency(qr_id):
 
     at_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
     return redirect(url_for("gerance_keybox", qr_id=qr_id))
+@app.route("/_debug_tenant")
+def _debug_tenant():
+    host = (request.headers.get("X-Forwarded-Host") or request.host)
+    return jsonify({
+        "host": host,
+        "tenant_param": request.args.get("tenant"),
+        "tenant_id": getattr(g, "tenant_id", None),
+        "tenants": q("select id, slug, status from tenants order by id"),
+        "keyboxes": q("select tenant_id, qrid, enabled from keyboxes order by id desc limit 20"),
+    })
 
 @app.route("/gerance/keybox/<qr_id>")
 def gerance_keybox(qr_id):
@@ -1282,6 +1292,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
