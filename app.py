@@ -68,21 +68,37 @@ def tenant_from_host():
     return (request.args.get("tenant") or "").lower()
 
 @app.before_request
+def tenant_from_request():
+    # 1) param ?tenant=demo (prioritaire pour debug)
+    t = (request.args.get("tenant") or "").strip().lower()
+    if t:
+        return t
+
+    # 2) sous-domaine demo.domaine.tld
+    host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(":")[0]
+    parts = host.split(".")
+    if len(parts) >= 3:
+        sub = parts[0].lower()
+        if sub not in ("www", "app"):
+            return sub
+
+    return ""
+
+@app.before_request
 def load_tenant():
-    slug = tenant_from_host()
+    slug = tenant_from_request()
+    g.tenant_slug = slug
+    g.tenant_id = None
+
     if not slug:
-        g.tenant_id = None
         return
 
-    t = q1(
-        "select id, slug from tenants where slug=%s and status='active'",
+    row = q1(
+        "select id from tenants where slug=%s and status='active'",
         (slug,)
     )
-    if not t:
-        g.tenant_id = None
-        return
-
-    g.tenant_id = t["id"]
+    if row:
+        g.tenant_id = row["id"]
 
 # =========================================================
 # Time helpers
@@ -1301,6 +1317,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
