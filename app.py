@@ -8,6 +8,8 @@ from secrets import token_urlsafe
 from flask import Flask, render_template_string, request, session, jsonify, redirect, url_for
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from db import q, q1, exec_sql
+
 
 # =========================================================
 # App + config
@@ -1251,6 +1253,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
