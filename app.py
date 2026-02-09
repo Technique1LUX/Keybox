@@ -396,9 +396,14 @@ def log_access(qrid: str, first: str, last: str, company: str, channel: str,
 # =========================================================
 # Keyboxes
 # =========================================================
-def get_keybox_by_qr(qrid: str):
-    recs = at_get(T_KEYBOXES, formula=f"{{QRID}}='{qrid}'", max_records=5)
-    return recs[0] if recs else None
+def get_keybox_by_qr(qrid):
+    if not g.get("tenant_id"):
+        return None
+
+    return q1(
+        "select * from keyboxes where tenant_id=%s and qrid=%s and enabled=true",
+        (g.tenant_id, qrid),
+    )
 
 def get_keyboxes_for_client(client: str):
     return at_get(T_KEYBOXES, formula=f"{{Client}}='{client}'", max_records=200)
@@ -1277,6 +1282,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
