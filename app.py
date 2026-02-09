@@ -643,6 +643,7 @@ def login():
             return redirect(url_for("gerance_portal"))
         return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
     return render_template_string(HTML_LOGIN)
+    
 @app.route("/_debug_db")
 def _debug_db():
     return jsonify({
@@ -1319,6 +1320,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
