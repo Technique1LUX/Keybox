@@ -480,19 +480,7 @@ def log_access(qrid: str, first: str, last: str, company: str, channel: str,
         })
     except Exception as e:
         logger.warning("LOG_ACCESS FAILED: %s", str(e))
-        
-def pg_keybox_update(keybox_id: int, fields: dict):
-    if not fields:
-        return
-    cols = []
-    params = []
-    for k, v in fields.items():
-        cols.append(f"{k}=%s")
-        params.append(v)
-    params.append(keybox_id)
-
-    exec_sql(f"update keyboxes set {', '.join(cols)} where id=%s", tuple(params))
-        
+              
 def pg_keybox_update(keybox_id: int, fields: dict):
     """
     fields: dict de colonnes Postgres (snake_case) -> valeurs
@@ -535,49 +523,26 @@ def gerance_can_access_qr(qrid: str) -> bool:
         return False
     return (kb.get("fields", {}).get("Client") == session.get("client"))
 
-def ensure_active_or_next_pin(kb):
+def ensure_active_or_next_pin(kb: dict):
     """
+    Postgres-only.
     Garantit:
-    - ActivePin = heure courante (Luxembourg)
-    - NextPin = heure suivante
+    - active_pin = heure courante (Luxembourg)
+    - next_pin = heure suivante
     Retourne: (active_pin, active_pin_id, active_start_iso, active_end_iso, err)
     """
     try:
-        f = kb.get("fields", {}) or {}
+        f = kb  # kb est déjà le dict Postgres (select * from keyboxes)
 
         now = now_lu()
         cur_start = round_down_hour(now)
         cur_end = cur_start + timedelta(hours=1)
 
-        cur_start_iso = iso(cur_start)
-        cur_end_iso = iso(cur_end)
-
-        # promote Next->Active si correspond à l'heure courante
-        if (
-            f.get("NextPin")
-            and f.get("NextStart") == cur_start_iso
-            and f.get("NextEnd") == cur_end_iso
-        ):
-            at_update(T_KEYBOXES, kb["id"], {
-                "ActivePin": f.get("NextPin"),
-                "ActivePinId": f.get("NextPinId"),
-                "ActiveStart": f.get("NextStart"),
-                "ActiveEnd": f.get("NextEnd"),
-                "NextPin": None,
-                "NextPinId": None,
-                "NextStart": None,
-                "NextEnd": None,
-            })
-            f["ActivePin"] = f.get("ActivePin")
-            f["ActivePinId"] = f.get("ActivePinId")
-            f["ActiveStart"] = f.get("ActiveStart")
-            f["ActiveEnd"] = f.get("ActiveEnd")
-
+        # Si active_pin en DB correspond déjà à la fenêtre courante -> OK
         active_ok = (
-            f.get("ActivePin")
-            and f.get("ActiveStart") == cur_start_iso
-            and f.get("ActiveEnd") == cur_end_iso
-            and is_active_window(f.get("ActiveStart"), f.get("ActiveEnd"))
+            f.get("active_pin")
+            and f.get("active_start") == cur_start
+            and f.get("active_end") == cur_end
         )
 
         if not active_ok:
@@ -585,50 +550,54 @@ def ensure_active_or_next_pin(kb):
             if err:
                 return None, None, None, None, err
 
-            pg_keybox_update(T_KEYBOXES, kb["id"], {
-                "ActivePin": pin,
-                "ActivePinId": pin_id,
-                "ActiveStart": cur_start_iso,
-                "ActiveEnd": cur_end_iso,
+            pg_keybox_update(f["id"], {
+                "active_pin": pin,
+                "active_pin_id": pin_id,
+                "active_start": cur_start,
+                "active_end": cur_end,
             })
 
-            f["ActivePin"] = pin
-            f["ActivePinId"] = pin_id
-            f["ActiveStart"] = cur_start_iso
-            f["ActiveEnd"] = cur_end_iso
+            # maj cache local
+            f["active_pin"] = pin
+            f["active_pin_id"] = pin_id
+            f["active_start"] = cur_start
+            f["active_end"] = cur_end
 
         # Next = prochaine heure
         next_start = cur_end
         next_end = next_start + timedelta(hours=1)
-        next_start_iso = iso(next_start)
-        next_end_iso = iso(next_end)
 
         next_ok = (
-            f.get("NextPin")
-            and f.get("NextStart") == next_start_iso
-            and f.get("NextEnd") == next_end_iso
+            f.get("next_pin")
+            and f.get("next_start") == next_start
+            and f.get("next_end") == next_end
         )
 
         if not next_ok:
             pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
             if not err2:
-                pg_keybox_update(T_KEYBOXES, kb["id"], {
-                    "NextPin": pin2,
-                    "NextPinId": pin2_id,
-                    "NextStart": next_start_iso,
-                    "NextEnd": next_end_iso,
+                pg_keybox_update(f["id"], {
+                    "next_pin": pin2,
+                    "next_pin_id": pin2_id,
+                    "next_start": next_start,
+                    "next_end": next_end,
                 })
+                f["next_pin"] = pin2
+                f["next_pin_id"] = pin2_id
+                f["next_start"] = next_start
+                f["next_end"] = next_end
 
-        logger.info(
-            "PIN_DEBUG now=%s cur=%s..%s Active=%s..%s Next=%s..%s",
-            now.isoformat(), cur_start_iso, cur_end_iso,
-            f.get("ActiveStart"), f.get("ActiveEnd"),
-            f.get("NextStart"), f.get("NextEnd"),
+        return (
+            f.get("active_pin"),
+            f.get("active_pin_id"),
+            iso(f.get("active_start")),
+            iso(f.get("active_end")),
+            None
         )
 
-        return f.get("ActivePin"), f.get("ActivePinId"), f.get("ActiveStart"), f.get("ActiveEnd"), None
     except Exception as e:
         return None, None, None, None, str(e)
+
 
 # =========================================================
 # Routes
@@ -653,6 +622,14 @@ def find_pending_request(qrid: str, email: str, phone: str):
 @app.route("/")
 def home():
     return "OK"
+@app.route("/_pin_test/<qrid>")
+def _pin_test(qrid):
+    kb = get_keybox_by_qr(qrid)
+    if not kb:
+        return jsonify({"error": "qr_unknown"}), 404
+    with _get_lock(qrid):
+        pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
+    return jsonify({"pin": pin, "pin_id": pin_id, "start": s, "end": e, "err": err})
 
 @app.route("/access/<qr_id>", methods=["GET", "POST"])
 @require_csrf
@@ -661,8 +638,8 @@ def tech_access(qr_id):
     if not kb:
         return "QR Code inconnu", 404
 
-    f = kb.get("fields", {}) or {}
-    bat = f.get("Batiment", "")
+    f = kb
+    bat = f.get("batiment", "")  # si tu as cette colonne en DB
     ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
 
     if request.method == "GET":
@@ -810,7 +787,7 @@ def set_emergency(qr_id):
     if not code:
         return "Code vide", 400
 
-    pg_keybox_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
+    pg_keybox_update(kb["id"], {"emergency_code": code})
     return redirect(url_for("gerance_keybox", qr_id=qr_id))
 @app.route("/_debug_tenant")
 def _debug_tenant():
@@ -1447,6 +1424,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
