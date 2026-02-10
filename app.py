@@ -788,36 +788,44 @@ def tech_access(qr_id):
     if not allowed:
         detail = reason
 
-        # si utilisateur absent / pas de permission -> on crée une demande Postgres
-        if reason in ("Utilisateur non enregistré.", "Aucune permission active."):
-            try:
-                keybox_id = pg_get_keybox_id(qr_id)
+    # cas où on crée une demande pending
+    if reason in (
+        "Utilisateur non enregistré.",
+        "Aucune permission active.",
+        "Utilisateur non approuvé.",
+    ):
+        try:
+            keybox_id = kb["id"]
 
-                # on crée/maj l'utilisateur en "pending" (Postgres)
-                if reason == "Utilisateur non enregistré.":
-                    pg_upsert_user(first, last, company, email, phone, status="pending")
+            existing = pg_find_pending_request(keybox_id, email, phone)
+            if existing:
+                detail = f"Demande déjà en attente (ID={existing['id']})"
+            else:
+                req = pg_create_request(
+                    keybox_id,
+                    first=first,
+                    last=last,
+                    company=company,
+                    email=email,
+                    phone=phone,
+                )
+                detail = f"Demande envoyée à la gérance (ID={req['id']})"
+        except Exception as e:
+            detail = f"Impossible de créer la demande: {e}"
 
-                existing = pg_find_pending_request(keybox_id, email, phone)
-                if existing:
-                    detail = f"Demande déjà en attente (ID={existing['id']})."
-                else:
-                    req = pg_create_request(keybox_id, first, last, company, email, phone)
-                    detail = f"Demande envoyée à la gérance (ID={req['id']})."
-            except Exception as e:
-                detail = f"Impossible de créer la demande: {e}"
+    log_access(qr_id, first, last, company, channel="none", error=reason)
 
-        log_access(qr_id, first, last, company, channel="none", error=detail)
-
-        return render_template_string(
-            HTML_PENDING,
-            qr_id=qr_id,
-            first=first,
-            last=last,
-            company=company,
-            email=email,
-            phone=phone,
-            csrf=csrf_input(),
-        )
+    return render_template_string(
+        HTML_PENDING,
+        qr_id=qr_id,
+        first=first,
+        last=last,
+        company=company,
+        email=email,
+        phone=phone,
+        detail=detail,          # <-- ajoute ça dans ton template si tu veux l'afficher
+        csrf=csrf_input(),
+    )
 
     # IMPORTANT: re-fetch pour avoir la dernière version avant lock
     kb = get_keybox_by_qr(qr_id)
@@ -1586,8 +1594,6 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
-
-
 
 
 
