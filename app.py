@@ -585,7 +585,7 @@ def ensure_active_or_next_pin(kb):
             if err:
                 return None, None, None, None, err
 
-            at_update(T_KEYBOXES, kb["id"], {
+            pg_keybox_update(T_KEYBOXES, kb["id"], {
                 "ActivePin": pin,
                 "ActivePinId": pin_id,
                 "ActiveStart": cur_start_iso,
@@ -612,7 +612,7 @@ def ensure_active_or_next_pin(kb):
         if not next_ok:
             pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
             if not err2:
-                at_update(T_KEYBOXES, kb["id"], {
+                pg_keybox_update(T_KEYBOXES, kb["id"], {
                     "NextPin": pin2,
                     "NextPinId": pin2_id,
                     "NextStart": next_start_iso,
@@ -810,7 +810,7 @@ def set_emergency(qr_id):
     if not code:
         return "Code vide", 400
 
-    at_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
+    pg_keybox_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
     return redirect(url_for("gerance_keybox", qr_id=qr_id))
 @app.route("/_debug_tenant")
 def _debug_tenant():
@@ -1447,6 +1447,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
