@@ -67,7 +67,6 @@ def tenant_from_host():
         return parts[0].lower()
     return (request.args.get("tenant") or "").lower()
 
-@app.before_request
 def tenant_from_request():
     # 1) param ?tenant=demo (prioritaire pour debug)
     t = (request.args.get("tenant") or "").strip().lower()
@@ -1320,6 +1319,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
