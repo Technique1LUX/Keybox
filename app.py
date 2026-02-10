@@ -493,6 +493,22 @@ def pg_keybox_update(keybox_id: int, fields: dict):
 
     exec_sql(f"update keyboxes set {', '.join(cols)} where id=%s", tuple(params))
         
+def pg_keybox_update(keybox_id: int, fields: dict):
+    """
+    fields: dict de colonnes Postgres (snake_case) -> valeurs
+    ex: {"active_pin": "1234", "active_start": "2026-02-10T12:00:00+01:00"}
+    """
+    if not fields:
+        return
+
+    cols = []
+    params = []
+    for col, val in fields.items():
+        cols.append(f"{col}=%s")
+        params.append(val)
+
+    params.append(keybox_id)
+    exec_sql(f"update keyboxes set {', '.join(cols)} where id=%s", tuple(params))
 
 # =========================================================
 # Keyboxes
@@ -542,7 +558,7 @@ def ensure_active_or_next_pin(kb):
             and f.get("NextStart") == cur_start_iso
             and f.get("NextEnd") == cur_end_iso
         ):
-            pg_at_update(T_KEYBOXES, kb["id"], {
+            at_update(T_KEYBOXES, kb["id"], {
                 "ActivePin": f.get("NextPin"),
                 "ActivePinId": f.get("NextPinId"),
                 "ActiveStart": f.get("NextStart"),
@@ -569,7 +585,7 @@ def ensure_active_or_next_pin(kb):
             if err:
                 return None, None, None, None, err
 
-            pg_at_update(T_KEYBOXES, kb["id"], {
+            at_update(T_KEYBOXES, kb["id"], {
                 "ActivePin": pin,
                 "ActivePinId": pin_id,
                 "ActiveStart": cur_start_iso,
@@ -596,7 +612,7 @@ def ensure_active_or_next_pin(kb):
         if not next_ok:
             pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
             if not err2:
-                pg_at_update(T_KEYBOXES, kb["id"], {
+                at_update(T_KEYBOXES, kb["id"], {
                     "NextPin": pin2,
                     "NextPinId": pin2_id,
                     "NextStart": next_start_iso,
@@ -794,7 +810,7 @@ def set_emergency(qr_id):
     if not code:
         return "Code vide", 400
 
-    pg_at_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
+    at_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
     return redirect(url_for("gerance_keybox", qr_id=qr_id))
 @app.route("/_debug_tenant")
 def _debug_tenant():
@@ -972,7 +988,7 @@ def gerance_approve_request(req_id):
 
     upsert_user(f.get("FirstName", ""), f.get("LastName", ""), f.get("Company", ""), email, phone, status="approved")
     create_permission(qrid, email, phone, active=True)
-    pg_at_update(T_REQUESTS, req_id, {"Status": "approved"})
+    at_update(T_REQUESTS, req_id, {"Status": "approved"})
     return redirect(url_for("gerance_requests"))
 
 @app.route("/gerance/requests/<req_id>/deny", methods=["POST"])
@@ -988,7 +1004,7 @@ def gerance_deny_request(req_id):
     if f.get("Client") != client:
         return "Unauthorized", 401
 
-    pg_at_update(T_REQUESTS, req_id, {"Status": "denied"})
+    at_update(T_REQUESTS, req_id, {"Status": "denied"})
     return redirect(url_for("gerance_requests"))
 
 @app.route("/prefill", strict_slashes=False)
@@ -1431,6 +1447,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
