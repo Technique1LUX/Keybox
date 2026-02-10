@@ -456,6 +456,140 @@ def pg_is_user_allowed(qrid: str, email: str, phone: str):
 
     return True, None, user
 
+def pg_get_keybox_id(qrid: str):
+    if not g.get("tenant_id"):
+        return None
+    row = q1(
+        "select id from keyboxes where tenant_id=%s and qrid=%s limit 1",
+        (g.tenant_id, qrid),
+    )
+    return row["id"] if row else None
+
+
+def pg_upsert_user(first, last, company, email, phone, status="approved"):
+    if not g.get("tenant_id"):
+        return None
+
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    row = q1(
+        """
+        insert into users (tenant_id, first_name, last_name, company, email, phone, status)
+        values (%s,%s,%s,%s,%s,%s,%s)
+        on conflict (tenant_id, email)
+        do update set
+          first_name=excluded.first_name,
+          last_name=excluded.last_name,
+          company=excluded.company,
+          phone=excluded.phone,
+          status=excluded.status
+        returning *
+        """,
+        (g.tenant_id, first, last, company, email, phone, status),
+    )
+    return row
+
+
+def pg_find_pending_request(keybox_id: int, email: str, phone: str):
+    email = norm_email(email or "")
+    phone = norm_phone(phone or "")
+
+    if not g.get("tenant_id") or not keybox_id:
+        return None
+
+    if email and phone:
+        return q1(
+            """
+            select *
+            from requests
+            where tenant_id=%s and keybox_id=%s and status='pending'
+              and (email=%s or phone=%s)
+            order by id desc
+            limit 1
+            """,
+            (g.tenant_id, keybox_id, email, phone),
+        )
+    if email:
+        return q1(
+            """
+            select *
+            from requests
+            where tenant_id=%s and keybox_id=%s and status='pending'
+              and email=%s
+            order by id desc
+            limit 1
+            """,
+            (g.tenant_id, keybox_id, email),
+        )
+    if phone:
+        return q1(
+            """
+            select *
+            from requests
+            where tenant_id=%s and keybox_id=%s and status='pending'
+              and phone=%s
+            order by id desc
+            limit 1
+            """,
+            (g.tenant_id, keybox_id, phone),
+        )
+    return None
+
+
+def pg_create_request(keybox_id: int, first: str, last: str, company: str, email: str, phone: str):
+    if not g.get("tenant_id") or not keybox_id:
+        return None
+
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    row = q1(
+        """
+        insert into requests
+          (tenant_id, keybox_id, first_name, last_name, company, email, phone, status, created_at)
+        values
+          (%s,%s,%s,%s,%s,%s,%s,'pending', now())
+        returning *
+        """,
+        (g.tenant_id, keybox_id, first, last, company, email, phone),
+    )
+    return row
+
+
+def pg_log_access(qrid: str, first: str, last: str, company: str, channel: str,
+                  pin_id: str = "", start=None, end=None, error: str = ""):
+    try:
+        if not g.get("tenant_id"):
+            return
+
+        keybox_id = pg_get_keybox_id(qrid)
+
+        exec_sql(
+            """
+            insert into access_logs
+              (tenant_id, keybox_id, qrid, first_name, last_name, company,
+               channel, pin_id, window_start, window_end, error, ts)
+            values
+              (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+            """,
+            (
+                g.tenant_id,
+                keybox_id,
+                qrid,
+                first,
+                last,
+                company,
+                channel,
+                pin_id or "",
+                start,
+                end,
+                error or "",
+            ),
+        )
+    except Exception as e:
+        logger.warning("PG_LOG_ACCESS FAILED: %s", str(e))
+
 
 def at_escape(s: str) -> str:
     # Airtable formule: string entre quotes simples
@@ -465,21 +599,11 @@ def at_escape(s: str) -> str:
 
 def log_access(qrid: str, first: str, last: str, company: str, channel: str,
                pin_id: str = "", start: str = "", end: str = "", error: str = ""):
-    try:
-        at_create(T_LOG, {
-            "Timestamp": iso(now_lu()),
-            "QRID": qrid,
-            "FirstName": first,
-            "LastName": last,
-            "Company": company,
-            "Channel": channel,
-            "PinId": pin_id or "",
-            "Start": start or "",
-            "End": end or "",
-            "Error": error or "",
-        })
-    except Exception as e:
-        logger.warning("LOG_ACCESS FAILED: %s", str(e))
+    # start/end viennent parfois en ISO string : on convertit en datetime si possible
+    sdt = parse_iso(start) if isinstance(start, str) and start else start
+    edt = parse_iso(end) if isinstance(end, str) and end else end
+    pg_log_access(qrid, first, last, company, channel, pin_id=pin_id, start=sdt, end=edt, error=error)
+
               
 def pg_keybox_update(keybox_id: int, fields: dict):
     """
@@ -663,27 +787,27 @@ def tech_access(qr_id):
 
     if not allowed:
         detail = reason
-        if (
-            reason == "Utilisateur non enregistré."
-            or reason == "Aucune permission active pour cette boîte."
-            or "status=pending" in (reason or "")
-        ):
-            try:
-                client = f.get("Client", "")
-                if reason == "Utilisateur non enregistré.":
-                    upsert_user(first, last, company, email, phone, status="pending")
 
-                existing = find_pending_request(qr_id, email, phone)
+        # si utilisateur absent / pas de permission -> on crée une demande Postgres
+        if reason in ("Utilisateur non enregistré.", "Aucune permission active."):
+            try:
+                keybox_id = pg_get_keybox_id(qr_id)
+
+                # on crée/maj l'utilisateur en "pending" (Postgres)
+                if reason == "Utilisateur non enregistré.":
+                    pg_upsert_user(first, last, company, email, phone, status="pending")
+
+                existing = pg_find_pending_request(keybox_id, email, phone)
                 if existing:
-                    detail = f"Demande déjà en attente de validation. (ID={existing.get('id')})"
+                    detail = f"Demande déjà en attente (ID={existing['id']})."
                 else:
-                    req = create_request(client, qr_id, first, last, company, email, phone)
-                    detail = f"Demande envoyée à la gérance. (ID={req.get('id')})"
+                    req = pg_create_request(keybox_id, first, last, company, email, phone)
+                    detail = f"Demande envoyée à la gérance (ID={req['id']})."
             except Exception as e:
                 detail = f"Impossible de créer la demande: {e}"
 
-        log_access(qr_id, first, last, company, channel="none", error=reason)
-                # ... après avoir créé/confirmé la demande pending
+        log_access(qr_id, first, last, company, channel="none", error=detail)
+
         return render_template_string(
             HTML_PENDING,
             qr_id=qr_id,
@@ -967,9 +1091,10 @@ def api_request_status(qr_id):
     if allowed:
         return jsonify({"status": "approved"})
 
-    pending = find_pending_request(qr_id, email, phone)
+    keybox_id = pg_get_keybox_id(qr_id)
+    pending = pg_find_pending_request(keybox_id, email, phone)
     if pending:
-        return jsonify({"status": "pending"})
+        return jsonify({"status": "pending", "request_id": pending["id"]})
 
     return jsonify({"status": "denied", "reason": reason})
 
@@ -1014,14 +1139,22 @@ def gerance_deny_request(req_id):
 
 @app.route("/prefill", strict_slashes=False)
 def prefill():
-    return jsonify({"error": "prefill disabled during postgres migration"}), 200
+    secret = request.args.get("secret", "")
+    if secret != os.getenv("PREFILL_SECRET"):
+        return "unauthorized", 401
 
+    if not g.get("tenant_id"):
+        return jsonify({"error": "tenant_missing"}), 400
 
-    keyboxes = at_get(T_KEYBOXES, formula="{Enabled}=1", max_records=200)
+    kbs = q(
+        "select * from keyboxes where tenant_id=%s and enabled=true order by id",
+        (g.tenant_id,),
+    )
+
     out = {"ok": 0, "err": 0, "results": []}
 
-    for kb in keyboxes:
-        qr = (kb.get("fields", {}) or {}).get("QRID", "")
+    for kb in kbs:
+        qr = kb.get("qrid")
         try:
             with _get_lock(qr):
                 pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
@@ -1035,6 +1168,7 @@ def prefill():
             out["err"] += 1
 
     return jsonify(out)
+
 
 @app.route("/gerance/logs")
 def gerance_logs():
@@ -1452,6 +1586,8 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
+
 
 
 
