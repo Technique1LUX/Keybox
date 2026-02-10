@@ -67,6 +67,7 @@ def tenant_from_host():
         return parts[0].lower()
     return (request.args.get("tenant") or "").lower()
 
+
 def tenant_from_request():
     # 1) param ?tenant=demo (prioritaire pour debug)
     t = (request.args.get("tenant") or "").strip().lower()
@@ -383,6 +384,72 @@ def is_user_allowed(qrid: str, email: str, phone: str):
         return False, "Aucune permission active pour cette boîte.", user
 
     return True, None, user
+# =========================================================
+# Postgres auth (TEMP pour remplacer Airtable)
+# =========================================================
+
+def pg_find_user(email: str, phone: str):
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    if not g.get("tenant_id"):
+        return None
+
+    if email and phone:
+        return q1(
+            "select * from users where tenant_id=%s and (email=%s or phone=%s) limit 1",
+            (g.tenant_id, email, phone),
+        )
+    if email:
+        return q1(
+            "select * from users where tenant_id=%s and email=%s limit 1",
+            (g.tenant_id, email),
+        )
+    if phone:
+        return q1(
+            "select * from users where tenant_id=%s and phone=%s limit 1",
+            (g.tenant_id, phone),
+        )
+    return None
+
+
+def pg_is_user_allowed(qrid: str, email: str, phone: str):
+    if not g.get("tenant_id"):
+        return False, "Tenant manquant.", None
+
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    user = pg_find_user(email, phone)
+    if not user:
+        return False, "Utilisateur non enregistré.", None
+
+    if (user.get("status") or "").lower() != "approved":
+        return False, "Utilisateur non approuvé.", user
+
+    kb = q1(
+        "select id from keyboxes where tenant_id=%s and qrid=%s and enabled=true",
+        (g.tenant_id, qrid),
+    )
+    if not kb:
+        return False, "QR Code inconnu.", user
+
+    perm = q1(
+        """
+        select id
+        from permissions
+        where tenant_id=%s
+          and keybox_id=%s
+          and user_id=%s
+          and active=true
+        """,
+        (g.tenant_id, kb["id"], user["id"]),
+    )
+    if not perm:
+        return False, "Aucune permission active.", user
+
+    return True, None, user
+
 
 def at_escape(s: str) -> str:
     # Airtable formule: string entre quotes simples
@@ -580,7 +647,7 @@ def tech_access(qr_id):
     email = norm_email(request.form.get("email") or "")
     phone = norm_phone(request.form.get("phone") or "")
 
-    allowed, reason, _user = is_user_allowed(qr_id, email=email, phone=phone)
+    allowed, reason, _user = pg_is_user_allowed(qr_id, email=email, phone=phone)
 
     if not allowed:
         detail = reason
@@ -830,7 +897,7 @@ def api_request_status(qr_id):
     email = norm_email(request.args.get("email", ""))
     phone = norm_phone(request.args.get("phone", ""))
 
-    allowed, reason, _ = is_user_allowed(qr_id, email=email, phone=phone)
+    allowed, reason, _ = pg_is_user_allowed(qr_id, email=email, phone=phone)
     if allowed:
         return jsonify({"status": "approved"})
 
@@ -1319,30 +1386,6 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
