@@ -248,25 +248,31 @@ def get_oauth_token() -> str:
 
 def igloo_create_hourly_pin(kb, start_dt: datetime, end_dt: datetime):
     try:
-        f = kb.get("fields", {}) or {}
-        device_id = f.get("DeviceId") or f.get("deviceId") or f.get("LockID")
+        # ✅ support Airtable record (kb["fields"]) ET Postgres dict (kb directement)
+        f = (kb.get("fields") or kb or {})
+
+        device_id = (
+            f.get("device_id")      # Postgres
+            or f.get("DeviceId")    # Airtable ancien champ
+            or f.get("deviceId")
+            or f.get("LockID")
+        )
         if not device_id:
             return None, None, "DeviceId manquant"
 
         token = get_oauth_token()
         url = f"{API_BASE}/devices/{device_id}/algopin/hourly"
 
-        # force timezone Luxembourg + arrondi propre
         start_dt = start_dt.astimezone(TZ).replace(minute=0, second=0, microsecond=0)
         end_dt = end_dt.astimezone(TZ).replace(minute=0, second=0, microsecond=0)
 
         payload = {
-            "variance": int(f.get("VarianceHourly", 1)),
+            "variance": int(f.get("variance_hourly") or f.get("VarianceHourly") or 1),
             "startDate": start_dt.isoformat(timespec="seconds"),
             "endDate": end_dt.isoformat(timespec="seconds"),
             "accessName": "PREFILL",
         }
-
+        
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -474,6 +480,19 @@ def log_access(qrid: str, first: str, last: str, company: str, channel: str,
         })
     except Exception as e:
         logger.warning("LOG_ACCESS FAILED: %s", str(e))
+        
+def pg_keybox_update(keybox_id: int, fields: dict):
+    if not fields:
+        return
+    cols = []
+    params = []
+    for k, v in fields.items():
+        cols.append(f"{k}=%s")
+        params.append(v)
+    params.append(keybox_id)
+
+    exec_sql(f"update keyboxes set {', '.join(cols)} where id=%s", tuple(params))
+        
 
 # =========================================================
 # Keyboxes
@@ -523,7 +542,7 @@ def ensure_active_or_next_pin(kb):
             and f.get("NextStart") == cur_start_iso
             and f.get("NextEnd") == cur_end_iso
         ):
-            at_update(T_KEYBOXES, kb["id"], {
+            pg_at_update(T_KEYBOXES, kb["id"], {
                 "ActivePin": f.get("NextPin"),
                 "ActivePinId": f.get("NextPinId"),
                 "ActiveStart": f.get("NextStart"),
@@ -550,7 +569,7 @@ def ensure_active_or_next_pin(kb):
             if err:
                 return None, None, None, None, err
 
-            at_update(T_KEYBOXES, kb["id"], {
+            pg_at_update(T_KEYBOXES, kb["id"], {
                 "ActivePin": pin,
                 "ActivePinId": pin_id,
                 "ActiveStart": cur_start_iso,
@@ -577,7 +596,7 @@ def ensure_active_or_next_pin(kb):
         if not next_ok:
             pin2, pin2_id, err2 = igloo_create_hourly_pin(kb, next_start, next_end)
             if not err2:
-                at_update(T_KEYBOXES, kb["id"], {
+                pg_at_update(T_KEYBOXES, kb["id"], {
                     "NextPin": pin2,
                     "NextPinId": pin2_id,
                     "NextStart": next_start_iso,
@@ -775,7 +794,7 @@ def set_emergency(qr_id):
     if not code:
         return "Code vide", 400
 
-    at_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
+    pg_at_update(T_KEYBOXES, kb["id"], {"EmergencyCode": code})
     return redirect(url_for("gerance_keybox", qr_id=qr_id))
 @app.route("/_debug_tenant")
 def _debug_tenant():
@@ -927,7 +946,7 @@ def gerance_approve_request(req_id):
 
     upsert_user(f.get("FirstName", ""), f.get("LastName", ""), f.get("Company", ""), email, phone, status="approved")
     create_permission(qrid, email, phone, active=True)
-    at_update(T_REQUESTS, req_id, {"Status": "approved"})
+    pg_at_update(T_REQUESTS, req_id, {"Status": "approved"})
     return redirect(url_for("gerance_requests"))
 
 @app.route("/gerance/requests/<req_id>/deny", methods=["POST"])
@@ -943,7 +962,7 @@ def gerance_deny_request(req_id):
     if f.get("Client") != client:
         return "Unauthorized", 401
 
-    at_update(T_REQUESTS, req_id, {"Status": "denied"})
+    pg_at_update(T_REQUESTS, req_id, {"Status": "denied"})
     return redirect(url_for("gerance_requests"))
 
 @app.route("/prefill", strict_slashes=False)
@@ -1386,6 +1405,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
