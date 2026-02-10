@@ -847,6 +847,32 @@ def gerance_keybox(qr_id):
     perms=perm_rows,
     csrf=csrf_input()
 )
+    
+@app.route("/_igloo_check/<qrid>")
+def _igloo_check(qrid):
+    kb = get_keybox_by_qr(qrid)
+    if not kb:
+        return jsonify({"error": "qr_unknown"}), 404
+
+    # support Airtable (kb["fields"]) ou Postgres (kb direct)
+    f = (kb.get("fields") or kb or {})
+    device_id = f.get("device_id") or f.get("DeviceId") or f.get("deviceId") or f.get("LockID")
+
+    if not device_id:
+        return jsonify({"error": "device_id_missing"}), 400
+
+    token = get_oauth_token()
+
+    # 1) check device existe ?
+    url = f"{API_BASE}/devices/{device_id}"
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=20, verify=VERIFY_SSL)
+
+    return jsonify({
+        "device_id": device_id,
+        "url": url,
+        "status": r.status_code,
+        "body": r.text[:500],
+    })
 
 
 @app.route("/gerance/keybox/<qr_id>/add_user", methods=["POST"])
@@ -1405,6 +1431,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
