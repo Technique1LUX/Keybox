@@ -733,6 +733,16 @@ def _debug_db():
         "tenants": q("select id, slug, status from tenants order by id"),
         "keyboxes": q("select tenant_id, qrid, enabled from keyboxes order by id desc limit 20"),
     })
+@app.route("/_debug_tables")
+def _debug_tables():
+    rows = q("""
+        select table_name
+        from information_schema.tables
+        where table_schema='public'
+        order by table_name
+    """)
+    return jsonify(rows)
+
 
 @app.route("/gerance")
 def gerance_portal():
@@ -1424,6 +1434,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
