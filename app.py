@@ -733,6 +733,7 @@ def _debug_db():
         "tenants": q("select id, slug, status from tenants order by id"),
         "keyboxes": q("select tenant_id, qrid, enabled from keyboxes order by id desc limit 20"),
     })
+    
 @app.route("/_debug_tables")
 def _debug_tables():
     rows = q("""
@@ -742,6 +743,23 @@ def _debug_tables():
         order by table_name
     """)
     return jsonify(rows)
+@app.route("/_debug_schema")
+def _debug_schema():
+    def cols(t):
+        return q("""
+          select column_name, data_type
+          from information_schema.columns
+          where table_schema='public' and table_name=%s
+          order by ordinal_position
+        """, (t,))
+    return jsonify({
+        "tenants": cols("tenants"),
+        "keyboxes": cols("keyboxes"),
+        "users": cols("users"),
+        "permissions": cols("permissions"),
+        "requests": cols("requests"),
+        "access_logs": cols("access_logs"),
+    })
 
 
 @app.route("/gerance")
@@ -1434,6 +1452,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
