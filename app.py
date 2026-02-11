@@ -69,12 +69,18 @@ def tenant_from_host():
 
 
 def tenant_from_request():
-    # 1) param ?tenant=demo (prioritaire pour debug)
+    # 1) param ?tenant=demo
     t = (request.args.get("tenant") or "").strip().lower()
     if t:
         return t
 
-    # 2) sous-domaine demo.domaine.tld
+    # ✅ 1bis) si POST: on accepte tenant dans le form
+    if request.method == "POST":
+        t = (request.form.get("tenant") or "").strip().lower()
+        if t:
+            return t
+
+    # 2) sous-domaine
     host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(":")[0]
     parts = host.split(".")
     if len(parts) >= 3:
@@ -82,7 +88,13 @@ def tenant_from_request():
         if sub not in ("www", "app"):
             return sub
 
+    # ✅ 3) fallback session (gérance)
+    t = (session.get("tenant_slug") or "").strip().lower()
+    if t:
+        return t
+
     return ""
+
 
 @app.before_request
 def load_tenant():
@@ -905,7 +917,7 @@ def login():
         if recs:
             session["role"] = "gerance"
             session["client"] = client
-            session["tenant_slug"] = (g.tenant_slug or request.args.get("tenant") or "").lower()
+            session["tenant_slug"] = g.tenant_slug or request.args.get("tenant", "")
             return redirect(url_for("gerance_portal"))
         return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
     return render_template_string(HTML_LOGIN)
@@ -1674,6 +1686,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
