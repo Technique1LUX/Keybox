@@ -87,16 +87,18 @@ def tenant_from_request():
 @app.before_request
 def load_tenant():
     slug = tenant_from_request()
+
+    # ✅ fallback: si pas de tenant dans l'URL, on prend celui de la session (gérance)
+    if not slug:
+        slug = (session.get("tenant_slug") or "").strip().lower()
+
     g.tenant_slug = slug
     g.tenant_id = None
 
     if not slug:
         return
 
-    row = q1(
-        "select id from tenants where slug=%s and status='active'",
-        (slug,)
-    )
+    row = q1("select id from tenants where slug=%s and status='active'", (slug,))
     if row:
         g.tenant_id = row["id"]
 
@@ -903,6 +905,7 @@ def login():
         if recs:
             session["role"] = "gerance"
             session["client"] = client
+            session["tenant_slug"] = (g.tenant_slug or request.args.get("tenant") or "").lower()
             return redirect(url_for("gerance_portal"))
         return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
     return render_template_string(HTML_LOGIN)
@@ -1149,7 +1152,7 @@ def gerance_requests():
             }
         })
 
-    return render_template_string(HTML_REQUESTS, reqs=reqs, client=session.get("client"), csrf=csrf_input())
+    return render_template_string(HTML_REQUESTS, reqs=reqs, client=session.get("client"), csrf=csrf_input(), tenant=g.tenant_slug)
 
 @app.route("/api/request_status/<qr_id>")
 def api_request_status(qr_id):
@@ -1496,7 +1499,8 @@ HTML_REQUESTS = """
               {{csrf|safe}}
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#22c55e;color:white;font-weight:700;cursor:pointer;">Valider</button>
               </form>
-              <form method="post" action="/gerance/requests/{{r['id']}}/deny?tenant={{request.args.get('tenant','')}}">
+              <form method="post" action="/gerance/requests/{{r['id']}}/approve?tenant={{tenant}}">
+
               {{csrf|safe}}
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#ef4444;color:white;font-weight:700;cursor:pointer;">Refuser</button>
               </form>
@@ -1670,6 +1674,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
