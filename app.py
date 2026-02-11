@@ -581,8 +581,8 @@ def ensure_active_or_next_pin(kb: dict):
     try:
         f = kb  # kb est déjà le dict Postgres (select * from keyboxes)
         for k in ("active_start", "active_end", "next_start", "next_end"):
-        if isinstance(f.get(k), str):
-        f[k] = parse_iso(f[k])
+            if isinstance(f.get(k), str):
+                f[k] = parse_iso(f[k])
 
 
         now = now_lu()
@@ -1479,6 +1479,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
