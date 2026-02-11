@@ -106,7 +106,13 @@ def load_tenant():
 def now_lu():
     return datetime.now(TZ)
 
-def iso(dt: datetime) -> str:
+def iso(dt) -> str:
+    # accepte datetime | str | None
+    if dt is None:
+        return ""
+    if isinstance(dt, str):
+        # déjà une string ISO (ou quasi), on renvoie tel quel
+        return dt
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=TZ)
     return dt.astimezone(TZ).isoformat(timespec="seconds")
@@ -574,6 +580,10 @@ def ensure_active_or_next_pin(kb: dict):
     """
     try:
         f = kb  # kb est déjà le dict Postgres (select * from keyboxes)
+        for k in ("active_start", "active_end", "next_start", "next_end"):
+        if isinstance(f.get(k), str):
+        f[k] = parse_iso(f[k])
+
 
         now = now_lu()
         cur_start = round_down_hour(now)
@@ -1469,6 +1479,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
