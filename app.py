@@ -1369,7 +1369,7 @@ HTML_GERANCE = """
 HTML_KEYBOX = """
 <body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
   <div style="max-width:900px;margin:auto;background:white;padding:24px;border-radius:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
-    <a href="/gerance" style="text-decoration:none;color:#2563eb;">← Retour</a>
+    <form method="pos<a href="/gerance?tenant={{request.args.get('tenant','')}}" style="text-decoration:none;color:#2563eb;">← Retour</a>t" action="/gerance/requests/{{r['id']}}/deny?tenant={{request.args.get('tenant','')}}">
     <h2 style="color:#2563eb;margin-top:10px;">{{batiment}} — Gestion</h2>
 
     <h3>Code d’urgence</h3>
@@ -1492,11 +1492,11 @@ HTML_REQUESTS = """
             <td style="padding:10px;">{{f.get('Email','')}}</td>
             <td style="padding:10px;">{{f.get('Phone','')}}</td>
             <td style="padding:10px;display:flex;gap:8px;">
-              <form method="post" action="/gerance/requests/{{r['id']}}/approve">
+              <form method="post" action="/gerance/requests/{{r['id']}}/approve?tenant={{request.args.get('tenant','')}}">
               {{csrf|safe}}
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#22c55e;color:white;font-weight:700;cursor:pointer;">Valider</button>
               </form>
-              <form method="post" action="/gerance/requests/{{r['id']}}/deny">
+              <form method="post" action="/gerance/requests/{{r['id']}}/deny?tenant={{request.args.get('tenant','')}}">
               {{csrf|safe}}
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#ef4444;color:white;font-weight:700;cursor:pointer;">Refuser</button>
               </form>
@@ -1670,6 +1670,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
