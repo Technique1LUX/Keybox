@@ -1500,7 +1500,6 @@ HTML_PENDING = """
     <script>
       const qrId = "{{qr_id}}";
       const tenant = encodeURIComponent("{{ request.args.get('tenant','') }}");
-      const tenant = encodeURIComponent("{{ request.args.get('tenant','') }}");
       const email = encodeURIComponent("{{email}}");
       const phone = encodeURIComponent("{{phone}}");
       const statusEl = document.getElementById("status");
@@ -1508,12 +1507,12 @@ HTML_PENDING = """
 
       async function check(){
         try{
-          const r = await fetch(`/api/request_status/${qrId}?email=${email}&phone=${phone}`);
+          const r = await fetch(`/api/request_status/${qrId}?tenant=${tenant}&email=${email}&phone=${phone}`);
           const d = await r.json();
 
           if(d.status === "approved"){
             statusEl.innerText = "✅ Accès validé — récupération du code…";
-            form.submit(); // <- recharge la page avec le code
+            form.submit();
             return;
           }
 
@@ -1529,11 +1528,12 @@ HTML_PENDING = """
       }
 
       check();
-      setInterval(check, 3000); // toutes les 3s
+      setInterval(check, 3000);
     </script>
   </div>
 </body>
 """
+
 
 
 HTML_LOGS = """
@@ -1571,6 +1571,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
