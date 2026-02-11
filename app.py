@@ -777,8 +777,12 @@ def tech_access(qr_id):
     company = (request.form.get("company") or "").strip()
     email = norm_email(request.form.get("email") or "")
     phone = norm_phone(request.form.get("phone") or "")
+    detail = ""
+
 
     allowed, reason, _user = pg_is_user_allowed(qr_id, email=email, phone=phone)
+    detail = reason or ""
+
 
     if not allowed:
         detail = reason
