@@ -911,16 +911,23 @@ def tech_access(qr_id):
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        client = request.form.get("client", "")
         pwd = request.form.get("pwd", "")
-        recs = at_get(T_KEYBOXES, formula=f"AND({{Client}}='{client}', {{Password}}='{pwd}')", max_records=1)
-        if recs:
+        if not g.get("tenant_id"):
+            return render_template_string(HTML_LOGIN, error="Tenant manquant (ajoute ?tenant=demo)")
+
+        row = q1("select gerance_password from tenants where id=%s", (g.tenant_id,))
+        if not row or not row.get("gerance_password"):
+            return render_template_string(HTML_LOGIN, error="Gérance non configurée")
+
+        if pwd == row["gerance_password"]:
             session["role"] = "gerance"
-            session["client"] = client
-            session["tenant_slug"] = g.tenant_slug or request.args.get("tenant", "")
-            return redirect(url_for("gerance_portal"))
-        return render_template_string(HTML_LOGIN, error="Identifiants incorrects")
+            session["tenant_slug"] = g.tenant_slug
+            return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
+
+        return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
+
     return render_template_string(HTML_LOGIN)
+
     
 @app.route("/_debug_db")
 def _debug_db():
@@ -937,42 +944,53 @@ def _debug_db():
 @app.route("/gerance")
 def gerance_portal():
     if session.get("role") != "gerance":
-        return redirect(url_for("login"))
+        return redirect(url_for("login", tenant=g.tenant_slug))
 
-    client = session.get("client")
-    recs = get_keyboxes_for_client(client)
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
+
+    kbs = q(
+        """
+        select qrid, batiment, emergency_code
+        from keyboxes
+        where tenant_id=%s and enabled=true
+        order by batiment, qrid
+        """,
+        (g.tenant_id,),
+    )
 
     rows = []
-    for r in recs:
-        f = r.get("fields", {}) or {}
-        qr = f.get("QRID")
-        bat = f.get("Batiment")
-        emergency_set = bool(f.get("EmergencyCode"))
-
-        _pin, _pid, s, e, err = ensure_active_or_next_pin(r)
-
+    for kb in kbs:
         rows.append({
-            "QRID": qr,
-            "Batiment": bat,
-            "EmergencySet": emergency_set,
-            "NextStart": s,
-            "NextEnd": e,
-            "Err": err,
+            "QRID": kb["qrid"],
+            "Batiment": kb.get("batiment") or "",
+            "EmergencySet": bool(kb.get("emergency_code")),
+            "NextStart": "",
+            "NextEnd": "",
+            "Err": "",
         })
 
     return render_template_string(HTML_GERANCE, rows=rows, csrf=csrf_input())
 
+
 @app.route("/api/emergency/<qr_id>")
 def api_emergency(qr_id):
-    if not gerance_can_access_qr(qr_id):
+    if session.get("role") not in ("gerance", "admin"):
         return jsonify({"error": "unauthorized"}), 401
+
+    if not g.get("tenant_id"):
+        return jsonify({"error": "tenant_missing"}), 400
+
     kb = get_keybox_by_qr(qr_id)
     if not kb:
         return jsonify({"error": "qr_unknown"}), 404
-    code = (kb.get("fields", {}) or {}).get("EmergencyCode")
+
+    code = kb.get("emergency_code") or ""
     if not code:
         return jsonify({"error": "not_set"}), 404
+
     return jsonify({"emergencyCode": code})
+
 
 @app.route("/gerance/keybox/<qr_id>/set_emergency", methods=["POST"])
 @require_csrf
@@ -1003,44 +1021,52 @@ def _debug_tenant():
 @app.route("/gerance/keybox/<qr_id>")
 def gerance_keybox(qr_id):
     if session.get("role") != "gerance":
-        return redirect(url_for("login"))
-    if not gerance_can_access_qr(qr_id):
-        return "Unauthorized", 401
+        return redirect(url_for("login", tenant=g.tenant_slug))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
 
     kb = get_keybox_by_qr(qr_id)
-    kf = kb.get("fields", {}) or {}
-    bat = kf.get("Batiment", "")
+    if not kb:
+        return "QR Code inconnu", 404
 
-    perms = at_get(T_PERMS, formula=f"{{QRID}}='{qr_id}'", max_records=200)
+    bat = kb.get("batiment") or ""
+    emergency = kb.get("emergency_code") or ""
+
+    rows = q(
+        """
+        select p.id as perm_id, p.active,
+               u.first_name, u.last_name, u.company, u.email, u.phone, u.status
+        from permissions p
+        join users u on u.id = p.user_id
+        where p.tenant_id=%s
+          and p.keybox_id=%s
+        order by u.last_name, u.first_name
+        """,
+        (g.tenant_id, kb["id"]),
+    )
 
     perm_rows = []
-    for p in perms:
-        pf = p.get("fields", {}) or {}
-        email = norm_email(pf.get("Email") or "")
-        phone = norm_phone(pf.get("Phone") or "")
-        active = bool(pf.get("Active"))
-
-        user = find_user(email, phone)
-        uf = user.get("fields", {}) if user else {}
-
+    for r in rows:
+        name = ((r.get("first_name") or "") + " " + (r.get("last_name") or "")).strip()
         perm_rows.append({
-            "perm_id": p["id"],
-            "email": email,
-            "phone": phone,
-            "active": active,
-            "name": (uf.get("FirstName", "") + " " + uf.get("LastName", "")).strip(),
-            "company": uf.get("Company", ""),
-            "status": uf.get("Status", "") if user else "unknown",
+            "perm_id": str(r["perm_id"]),
+            "email": r.get("email") or "",
+            "phone": r.get("phone") or "",
+            "active": bool(r.get("active")),
+            "name": name,
+            "company": r.get("company") or "",
+            "status": r.get("status") or "",
         })
 
     return render_template_string(
-    HTML_KEYBOX,
-    qr_id=qr_id, batiment=bat,
-    emergency=(kf.get("EmergencyCode") or ""),
-    perms=perm_rows,
-    csrf=csrf_input()
-)
-    
+        HTML_KEYBOX,
+        qr_id=qr_id,
+        batiment=bat,
+        emergency=emergency,
+        perms=perm_rows,
+        csrf=csrf_input(),
+    )
+
 @app.route("/_igloo_check/<qrid>")
 def _igloo_check(qrid):
     kb = get_keybox_by_qr(qrid)
@@ -1089,9 +1115,13 @@ def _debug_allowed(qrid):
 @require_csrf
 def gerance_add_user(qr_id):
     if session.get("role") != "gerance":
-        return redirect(url_for("login"))
-    if not gerance_can_access_qr(qr_id):
-        return "Unauthorized", 401
+        return redirect(url_for("login", tenant=g.tenant_slug))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
+
+    kb = get_keybox_by_qr(qr_id)
+    if not kb:
+        return "QR Code inconnu", 404
 
     first = (request.form.get("first") or "").strip()
     last = (request.form.get("last") or "").strip()
@@ -1102,19 +1132,30 @@ def gerance_add_user(qr_id):
     if not email and not phone:
         return "Email ou téléphone requis", 400
 
-    upsert_user(first, last, company, email, phone, status="approved")
-    create_permission(qr_id, email, phone, active=True)
-    return redirect(url_for("gerance_keybox", qr_id=qr_id))
+    user = pg_upsert_user(first, last, company, email, phone, status="approved")
+    pg_ensure_permission(kb["id"], user["id"], active=True)
+
+    return redirect(url_for("gerance_keybox", qr_id=qr_id, tenant=g.tenant_slug))
+
 
 @app.route("/gerance/perm/<perm_id>/toggle", methods=["POST"])
 @require_csrf
 def gerance_toggle_perm(perm_id):
     if session.get("role") != "gerance":
-        return redirect(url_for("login"))
+        return redirect(url_for("login", tenant=g.tenant_slug))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
+
     active = (request.form.get("active") == "1")
-    set_permission_active(perm_id, active)
+
+    exec_sql(
+        "update permissions set active=%s where tenant_id=%s and id=%s",
+        (bool(active), g.tenant_id, int(perm_id)),
+    )
+
     back = request.form.get("back") or "/gerance"
     return redirect(back)
+
 
 @app.route("/admin", methods=["GET", "POST"])
 def admin():
@@ -1265,27 +1306,39 @@ def prefill():
 @app.route("/gerance/logs")
 def gerance_logs():
     if session.get("role") != "gerance":
-        return redirect(url_for("login"))
+        return redirect(url_for("login", tenant=g.tenant_slug))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
 
-    client = session.get("client") or ""
+    logs = q(
+        """
+        select ts, qrid, first_name, last_name, company, window_start, window_end, pin_id
+        from access_logs
+        where tenant_id=%s
+          and channel='screen'
+          and coalesce(error,'')=''
+        order by ts desc
+        limit 200
+        """,
+        (g.tenant_id,),
+    )
 
-    keyboxes = get_keyboxes_for_client(client)
-    qrids = {(kb.get("fields", {}) or {}).get("QRID") for kb in keyboxes}
-    qrids.discard(None)
-    qrids.discard("")
+    # On adapte au template existant (qui attend Airtable-like)
+    fake = []
+    for r in logs:
+        fake.append({"fields": {
+            "Timestamp": iso(r["ts"]),
+            "QRID": r["qrid"],
+            "FirstName": r.get("first_name") or "",
+            "LastName": r.get("last_name") or "",
+            "Company": r.get("company") or "",
+            "Start": iso(r.get("window_start")),
+            "End": iso(r.get("window_end")),
+            "PinId": r.get("pin_id") or "",
+        }})
 
-    logs = at_get_sorted(T_LOG, max_records=300, sort_field="Timestamp", direction="desc") or []
+    return render_template_string(HTML_LOGS, logs=fake, client=g.tenant_slug)
 
-    def is_success(rec):
-        f = (rec.get("fields", {}) or {})
-        if f.get("QRID") not in qrids:
-            return False
-        if (f.get("Channel") or "") != "screen":
-            return False
-        return (f.get("Error") or "").strip() == ""
-
-    logs = [r for r in logs if is_success(r)][:200]
-    return render_template_string(HTML_LOGS, logs=logs, client=client)
 
 @app.after_request
 def security_headers(resp):
@@ -1304,10 +1357,10 @@ HTML_LOGIN = """
   <div style="background:white; padding:40px; border-radius:20px; box-shadow:0 10px 25px rgba(0,0,0,0.1); width:350px; text-align:center;">
     <h2 style="color:#2563eb;">Connexion Gérance</h2>
     <form method="post">
-      <input type="text" name="client" placeholder="Nom Gérance" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
-      <input type="password" name="pwd" placeholder="Mot de passe" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
-      <button style="width:100%; padding:12px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Entrer</button>
+  <input type="password" name="pwd" placeholder="Mot de passe" style="width:100%; padding:12px; margin:10px 0; border:1px solid #ddd; border-radius:8px;">
+  <button style="width:100%; padding:12px; background:#2563eb; color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer;">Entrer</button>
     </form>
+
     {% if error %}<p style="color:red;">{{error}}</p>{% endif %}
   </div>
 </body>
@@ -1691,6 +1744,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
