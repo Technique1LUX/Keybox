@@ -1190,12 +1190,15 @@ def gerance_approve_request(req_id):
     if not g.get("tenant_id"):
         return "Tenant manquant", 400
 
-    rid = int(req_id)
+    try:
+        rid = int(req_id)
+    except ValueError:
+        return f"Bad request id: {req_id}", 400
+
     req = pg_get_request(rid)
     if not req:
         return "Request introuvable", 404
 
-    # 1) user
     user = pg_upsert_user(
         req.get("first_name") or "",
         req.get("last_name") or "",
@@ -1205,17 +1208,14 @@ def gerance_approve_request(req_id):
         status="approved",
     )
 
-    # 2) permission
     pg_ensure_permission(req["keybox_id"], user["id"], active=True)
 
-    # 3) update request
     exec_sql(
-        "update requests set status='approved', updated_at=now() where tenant_id=%s and id=%s",
+        "update requests set status='approved' where tenant_id=%s and id=%s",
         (g.tenant_id, rid),
     )
 
     return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
-
 
 @app.route("/gerance/requests/<req_id>/deny", methods=["POST"])
 @require_csrf
@@ -1225,12 +1225,17 @@ def gerance_deny_request(req_id):
     if not g.get("tenant_id"):
         return "Tenant manquant", 400
 
-    rid = int(req_id)
+    try:
+        rid = int(req_id)
+    except ValueError:
+        return f"Bad request id: {req_id}", 400
+
     exec_sql(
-        "update requests set status='denied', updated_at=now() where tenant_id=%s and id=%s",
+        "update requests set status='denied' where tenant_id=%s and id=%s",
         (g.tenant_id, rid),
     )
     return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
+
 
 
 @app.route("/prefill", strict_slashes=False)
@@ -1686,6 +1691,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
