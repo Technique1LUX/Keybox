@@ -994,6 +994,23 @@ def _igloo_check(qrid):
         "body": r.text[:500],
     })
 
+@app.route("/_debug_allowed/<qrid>")
+def _debug_allowed(qrid):
+    email = norm_email(request.args.get("email", ""))
+    phone = norm_phone(request.args.get("phone", ""))
+
+    ok, reason, user = pg_is_user_allowed(qrid, email=email, phone=phone)
+
+    return jsonify({
+        "tenant_id": g.tenant_id,
+        "qrid": qrid,
+        "email": email,
+        "phone": phone,
+        "ok": ok,
+        "reason": reason,
+        "user": user
+    })
+
 
 @app.route("/gerance/keybox/<qr_id>/add_user", methods=["POST"])
 @require_csrf
@@ -1551,6 +1568,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
