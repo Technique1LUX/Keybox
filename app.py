@@ -158,6 +158,13 @@ def require_csrf(fn):
         return fn(*args, **kwargs)
     return wrapper
 
+AIRTABLE_DISABLED = os.getenv("AIRTABLE_DISABLED", "0") == "1"
+
+def airtable_hit(op, table):
+    logger.warning("AIRTABLE HIT %s %s %s", op, table, request.path)
+    if AIRTABLE_DISABLED:
+        raise RuntimeError(f"Airtable disabled: {op} {table} used by {request.path}")
+
 # =========================================================
 # Airtable client
 # =========================================================
@@ -171,6 +178,7 @@ def at_headers(json=False):
     return h
 
 def at_get(table: str, formula: str = "", max_records: int = 50):
+    airtable_hit("operation", table)
     params = {"maxRecords": max_records}
     if formula:
         params["filterByFormula"] = formula
@@ -179,6 +187,7 @@ def at_get(table: str, formula: str = "", max_records: int = 50):
     return r.json().get("records", [])
 
 def at_get_sorted(table: str, formula: str = "", max_records: int = 50, sort_field: str = "Timestamp", direction: str = "desc"):
+    airtable_hit("operation", table)
     params = {
         "maxRecords": max_records,
         "sort[0][field]": sort_field,
@@ -191,18 +200,21 @@ def at_get_sorted(table: str, formula: str = "", max_records: int = 50, sort_fie
     return r.json().get("records", [])
 
 def at_read(table: str, record_id: str):
+    airtable_hit("operation", table)
     r = requests.get(f"{at_url(table)}/{record_id}", headers=at_headers(), timeout=20, verify=VERIFY_SSL)
     if r.status_code != 200:
         raise RuntimeError(f"Airtable read failed {r.status_code}: {r.text}")
     return r.json()
 
 def at_create(table: str, fields: dict):
+    airtable_hit("operation", table)
     r = requests.post(at_url(table), headers=at_headers(json=True), json={"fields": fields}, timeout=20, verify=VERIFY_SSL)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Airtable create failed {r.status_code}: {r.text}")
     return r.json()
 
 def at_update(table: str, record_id: str, fields: dict):
+    airtable_hit("operation", table)
     r = requests.patch(f"{at_url(table)}/{record_id}", headers=at_headers(json=True), json={"fields": fields}, timeout=20, verify=VERIFY_SSL)
     if r.status_code not in (200, 201):
         raise RuntimeError(f"Airtable update failed {r.status_code}: {r.text}")
@@ -1457,6 +1469,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
