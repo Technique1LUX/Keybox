@@ -435,6 +435,46 @@ def pg_find_user(email: str, phone: str):
             (g.tenant_id, phone),
         )
     return None
+def pg_find_pending_request(keybox_id: int, email: str, phone: str):
+    if not g.get("tenant_id"):
+        return None
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    return q1(
+        """
+        select *
+        from requests
+        where tenant_id=%s
+          and keybox_id=%s
+          and status='pending'
+          and (
+            (%s <> '' and email=%s)
+            or
+            (%s <> '' and phone=%s)
+          )
+        order by id desc
+        limit 1
+        """,
+        (g.tenant_id, keybox_id, email, email, phone, phone),
+    )
+
+
+def pg_create_request(keybox_id: int, first: str, last: str, company: str, email: str, phone: str):
+    if not g.get("tenant_id"):
+        raise RuntimeError("Tenant manquant.")
+
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    # insert + return (version compatible sans RETURNING si tu veux)
+    row = q1(
+        """
+        insert into requests
+          (tenant_id, keybox_id, first_name, last_name, company, email, phone, status, created_at)
+        values
+          (%s,%s,%s,%s,%s,%s,%s,'pending', now())
+        returning id
 
 
 def pg_is_user_allowed(qrid: str, email: str, phone: str):
@@ -1479,6 +1519,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
