@@ -542,6 +542,76 @@ def pg_is_user_allowed(qrid: str, email: str, phone: str):
 
     return True, None, user
 
+def pg_get_request(req_id: int):
+    if not g.get("tenant_id"):
+        return None
+    return q1(
+        """
+        select r.*, k.qrid
+        from requests r
+        join keyboxes k on k.id = r.keybox_id
+        where r.tenant_id=%s and r.id=%s
+        """,
+        (g.tenant_id, req_id),
+    )
+
+def pg_upsert_user(first: str, last: str, company: str, email: str, phone: str, status="approved"):
+    if not g.get("tenant_id"):
+        raise RuntimeError("Tenant manquant.")
+
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    user = pg_find_user(email, phone)
+    if user:
+        exec_sql(
+            """
+            update users
+            set first_name=%s, last_name=%s, company=%s, email=%s, phone=%s, status=%s
+            where tenant_id=%s and id=%s
+            """,
+            (first, last, company, email, phone, status, g.tenant_id, user["id"]),
+        )
+        return q1("select * from users where tenant_id=%s and id=%s", (g.tenant_id, user["id"]))
+
+    row = q1(
+        """
+        insert into users (tenant_id, first_name, last_name, company, email, phone, status, created_at)
+        values (%s,%s,%s,%s,%s,%s,%s, now())
+        returning *
+        """,
+        (g.tenant_id, first, last, company, email, phone, status),
+    )
+    return row
+
+def pg_ensure_permission(keybox_id: int, user_id: int, active: bool = True):
+    if not g.get("tenant_id"):
+        raise RuntimeError("Tenant manquant.")
+
+    existing = q1(
+        """
+        select id, active
+        from permissions
+        where tenant_id=%s and keybox_id=%s and user_id=%s
+        """,
+        (g.tenant_id, keybox_id, user_id),
+    )
+    if existing:
+        exec_sql(
+            "update permissions set active=%s where tenant_id=%s and id=%s",
+            (bool(active), g.tenant_id, existing["id"]),
+        )
+        return existing["id"]
+
+    row = q1(
+        """
+        insert into permissions (tenant_id, keybox_id, user_id, active, created_at)
+        values (%s,%s,%s,%s, now())
+        returning id
+        """,
+        (g.tenant_id, keybox_id, user_id, bool(active)),
+    )
+    return (row or {}).get("id")
 
 def at_escape(s: str) -> str:
     # Airtable formule: string entre quotes simples
@@ -1049,18 +1119,37 @@ def admin():
 def gerance_requests():
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
 
-    client = session.get("client") or ""
+    rows = q(
+        """
+        select r.*, k.qrid
+        from requests r
+        join keyboxes k on k.id = r.keybox_id
+        where r.tenant_id = %s
+          and r.status = 'pending'
+        order by r.id desc
+        limit 300
+        """,
+        (g.tenant_id,),
+    )
 
-    keyboxes = get_keyboxes_for_client(client)
-    qrids = {(kb.get("fields", {}) or {}).get("QRID") for kb in keyboxes}
-    qrids.discard(None)
-    qrids.discard("")
+    reqs = []
+    for r in rows:
+        reqs.append({
+            "id": str(r["id"]),  # template utilise r['id'] dans l'URL
+            "fields": {
+                "QRID": r["qrid"],
+                "FirstName": r.get("first_name") or "",
+                "LastName": r.get("last_name") or "",
+                "Company": r.get("company") or "",
+                "Email": r.get("email") or "",
+                "Phone": r.get("phone") or "",
+            }
+        })
 
-    reqs = at_get(T_REQUESTS, formula="{Status}='pending'", max_records=200) or []
-    reqs = [r for r in reqs if (r.get("fields", {}) or {}).get("QRID") in qrids]
-
-    return render_template_string(HTML_REQUESTS, reqs=reqs, client=client, csrf=csrf_input())
+    return render_template_string(HTML_REQUESTS, reqs=reqs, client=session.get("client"), csrf=csrf_input())
 
 @app.route("/api/request_status/<qr_id>")
 def api_request_status(qr_id):
@@ -1083,38 +1172,51 @@ def api_request_status(qr_id):
 def gerance_approve_request(req_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
 
-    client = session.get("client")
-    req = at_read(T_REQUESTS, req_id)
-    f = req.get("fields", {}) or {}
+    rid = int(req_id)
+    req = pg_get_request(rid)
+    if not req:
+        return "Request introuvable", 404
 
-    if f.get("Client") != client:
-        return "Unauthorized", 401
+    # 1) user
+    user = pg_upsert_user(
+        req.get("first_name") or "",
+        req.get("last_name") or "",
+        req.get("company") or "",
+        req.get("email") or "",
+        req.get("phone") or "",
+        status="approved",
+    )
 
-    qrid = f.get("QRID")
-    email = f.get("Email", "")
-    phone = f.get("Phone", "")
+    # 2) permission
+    pg_ensure_permission(req["keybox_id"], user["id"], active=True)
 
-    upsert_user(f.get("FirstName", ""), f.get("LastName", ""), f.get("Company", ""), email, phone, status="approved")
-    create_permission(qrid, email, phone, active=True)
-    at_update(T_REQUESTS, req_id, {"Status": "approved"})
-    return redirect(url_for("gerance_requests"))
+    # 3) update request
+    exec_sql(
+        "update requests set status='approved', updated_at=now() where tenant_id=%s and id=%s",
+        (g.tenant_id, rid),
+    )
+
+    return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
+
 
 @app.route("/gerance/requests/<req_id>/deny", methods=["POST"])
 @require_csrf
 def gerance_deny_request(req_id):
     if session.get("role") != "gerance":
         return redirect(url_for("login"))
+    if not g.get("tenant_id"):
+        return "Tenant manquant", 400
 
-    client = session.get("client")
-    req = at_read(T_REQUESTS, req_id)
-    f = req.get("fields", {}) or {}
+    rid = int(req_id)
+    exec_sql(
+        "update requests set status='denied', updated_at=now() where tenant_id=%s and id=%s",
+        (g.tenant_id, rid),
+    )
+    return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
 
-    if f.get("Client") != client:
-        return "Unauthorized", 401
-
-    at_update(T_REQUESTS, req_id, {"Status": "denied"})
-    return redirect(url_for("gerance_requests"))
 
 @app.route("/prefill", strict_slashes=False)
 def prefill():
@@ -1568,6 +1670,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
