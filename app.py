@@ -713,14 +713,7 @@ def get_keyboxes_for_client(client: str):
     return at_get(T_KEYBOXES, formula=f"{{Client}}='{client}'", max_records=200)
 
 def gerance_can_access_qr(qrid: str) -> bool:
-    if session.get("role") not in ("gerance", "admin"):
-        return False
-    if session.get("role") == "admin":
-        return True
-    kb = get_keybox_by_qr(qrid)
-    if not kb:
-        return False
-    return (kb.get("fields", {}).get("Client") == session.get("client"))
+    return session.get("role") in ("gerance", "admin")
 
 def ensure_active_or_next_pin(kb: dict):
     """
@@ -1744,6 +1737,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
