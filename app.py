@@ -811,6 +811,7 @@ def tech_access(qr_id):
 
     return render_template_string(
         HTML_PENDING,
+        tenant=g.tenant_slug or "",
         qr_id=qr_id,
         first=first,
         last=last,
@@ -1487,7 +1488,7 @@ HTML_PENDING = """
 
     <div id="status" style="opacity:.85;font-size:13px;">Vérification…</div>
 
-    <form id="autoForm" method="post" action="/access/{{qr_id}}" style="display:none;">
+    <form id="autoForm" method="post" action="/access/{{qr_id}}?tenant={{request.args.get('tenant','')}}" style="display:none;">
       {{csrf|safe}}
       <input type="hidden" name="first" value="{{first}}">
       <input type="hidden" name="last" value="{{last}}">
@@ -1498,6 +1499,8 @@ HTML_PENDING = """
 
     <script>
       const qrId = "{{qr_id}}";
+      const tenant = encodeURIComponent("{{ request.args.get('tenant','') }}");
+      const tenant = encodeURIComponent("{{ request.args.get('tenant','') }}");
       const email = encodeURIComponent("{{email}}");
       const phone = encodeURIComponent("{{phone}}");
       const statusEl = document.getElementById("status");
@@ -1568,6 +1571,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
