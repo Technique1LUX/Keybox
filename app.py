@@ -757,75 +757,61 @@ def tech_access(qr_id):
     if not kb:
         return "QR Code inconnu", 404
 
-    f = kb
-    bat = f.get("batiment", "")  # si tu as cette colonne en DB
+    bat = kb.get("batiment", "")
     ip = request.headers.get("X-Forwarded-For", request.remote_addr) or "unknown"
 
     if request.method == "GET":
         return render_template_string(HTML_TECH_FORM, batiment=bat, csrf=csrf_input())
 
-    if not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600):
-        return render_template_string(
-        HTML_TECH_RESULT,
-        ok=False,
-        msg="Trop de demandes",
-        detail="Réessayez dans quelques minutes."
-    )
-
+    # --- POST ---
     first = (request.form.get("first") or "").strip()
     last = (request.form.get("last") or "").strip()
     company = (request.form.get("company") or "").strip()
     email = norm_email(request.form.get("email") or "")
     phone = norm_phone(request.form.get("phone") or "")
-    detail = ""
 
+    # limite uniquement sur soumission "humaine" (optionnel mais conseillé)
+    is_auto = (request.form.get("auto") == "1")
+    if (not is_auto) and (not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600)):
+        return render_template_string(
+            HTML_TECH_RESULT,
+            ok=False,
+            msg="Trop de demandes",
+            detail="Réessayez dans quelques minutes."
+        )
 
     allowed, reason, _user = pg_is_user_allowed(qr_id, email=email, phone=phone)
-    detail = reason or ""
 
-
+    # --- PAS AUTORISÉ => pending / denied ---
     if not allowed:
-        detail = reason
+        detail = reason or "Accès refusé."
 
-    # cas où on crée une demande pending
-    if reason in (
-        "Utilisateur non enregistré.",
-        "Aucune permission active.",
-        "Utilisateur non approuvé.",
-    ):
-        try:
-            keybox_id = kb["id"]
+        if reason in ("Utilisateur non enregistré.", "Aucune permission active.", "Utilisateur non approuvé."):
+            try:
+                existing = pg_find_pending_request(kb["id"], email, phone)
+                if existing:
+                    detail = f"Demande déjà en attente. (id={existing['id']})"
+                else:
+                    req = pg_create_request(kb["id"], first, last, company, email, phone)
+                    detail = f"Demande envoyée à la gérance. (id={req['id']})"
+            except Exception as e:
+                detail = f"Impossible de créer la demande: {e}"
 
-            existing = pg_find_pending_request(keybox_id, email, phone)
-            if existing:
-                detail = f"Demande déjà en attente. (id={existing['id']})"
-            else:
-                req = pg_create_request(keybox_id, first, last, company, email, phone)
-                detail = f"Demande envoyée à la gérance. (id={req['id']})"
+        pg_log_access(qr_id, first, last, company, channel="none", error=detail)
 
-        except Exception as e:
-            detail = f"Impossible de créer la demande: {e}"
+        return render_template_string(
+            HTML_PENDING,
+            qr_id=qr_id,
+            first=first,
+            last=last,
+            company=company,
+            email=email,
+            phone=phone,
+            csrf=csrf_input(),
+            detail=detail,
+        )
 
-    # log en Postgres (si tu l'as déjà), sinon laisse ton log_access actuel
-    pg_log_access(qr_id, first, last, company, channel="none", error=detail)
-
-    return render_template_string(
-        HTML_PENDING,
-        tenant=g.tenant_slug or "",
-        qr_id=qr_id,
-        first=first,
-        last=last,
-        company=company,
-        email=email,
-        phone=phone,
-        csrf=csrf_input(),
-        detail=detail,  # <-- utile si ton template l'affiche
-    )
-
-
-    # IMPORTANT: re-fetch pour avoir la dernière version avant lock
-    kb = get_keybox_by_qr(qr_id)
-
+    # --- AUTORISÉ => on génère et on affiche le code ---
     with _get_lock(qr_id):
         pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
 
@@ -836,6 +822,7 @@ def tech_access(qr_id):
     detail = f"Valide: {s} → {e}"
     pg_log_access(qr_id, first, last, company, channel="screen", pin_id=pin_id, start=s, end=e, error="")
     return render_template_string(HTML_TECH_RESULT, ok=True, msg="Code prêt", detail=detail, pin=pin)
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -1490,6 +1477,7 @@ HTML_PENDING = """
 
     <form id="autoForm" method="post" action="/access/{{qr_id}}?tenant={{request.args.get('tenant','')}}" style="display:none;">
       {{csrf|safe}}
+      <input type="hidden" name="auto" value="1">
       <input type="hidden" name="first" value="{{first}}">
       <input type="hidden" name="last" value="{{last}}">
       <input type="hidden" name="company" value="{{company}}">
@@ -1580,6 +1568,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
