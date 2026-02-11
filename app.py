@@ -1498,38 +1498,47 @@ HTML_PENDING = """
     </form>
 
     <script>
-      const qrId = "{{qr_id}}";
-      const tenant = encodeURIComponent("{{ request.args.get('tenant','') }}");
-      const email = encodeURIComponent("{{email}}");
-      const phone = encodeURIComponent("{{phone}}");
-      const statusEl = document.getElementById("status");
-      const form = document.getElementById("autoForm");
+  const qrId = "{{qr_id}}";
+  const tenant = encodeURIComponent("{{ request.args.get('tenant','') }}");
+  const email = encodeURIComponent("{{email}}");
+  const phone = encodeURIComponent("{{phone}}");
+  const statusEl = document.getElementById("status");
+  const form = document.getElementById("autoForm");
 
-      async function check(){
-        try{
-          const r = await fetch(`/api/request_status/${qrId}?tenant=${tenant}&email=${email}&phone=${phone}`);
-          const d = await r.json();
+  let submitted = false;
+  let timer = null;
 
-          if(d.status === "approved"){
-            statusEl.innerText = "✅ Accès validé — récupération du code…";
-            form.submit();
-            return;
-          }
+  async function check(){
+    if(submitted) return;
 
-          if(d.status === "pending"){
-            statusEl.innerText = "⏳ Toujours en attente…";
-            return;
-          }
+    try{
+      const r = await fetch(`/api/request_status/${qrId}?tenant=${tenant}&email=${email}&phone=${phone}`);
+      const d = await r.json();
 
-          statusEl.innerText = "❌ Demande refusée ou introuvable.";
-        }catch(e){
-          statusEl.innerText = "Erreur réseau, nouvelle tentative…";
-        }
+      if(d.status === "approved"){
+        submitted = true;
+        if(timer) clearInterval(timer);
+        statusEl.innerText = "✅ Accès validé — récupération du code…";
+        form.submit();
+        return;
       }
 
-      check();
-      setInterval(check, 3000);
-    </script>
+      if(d.status === "pending"){
+        statusEl.innerText = "⏳ Toujours en attente…";
+        return;
+      }
+
+      if(timer) clearInterval(timer);
+      statusEl.innerText = "❌ Demande refusée ou introuvable.";
+    }catch(e){
+      statusEl.innerText = "Erreur réseau, nouvelle tentative…";
+    }
+  }
+
+  check();
+  timer = setInterval(check, 3000);
+</script>
+
   </div>
 </body>
 """
