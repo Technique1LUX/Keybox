@@ -467,7 +467,6 @@ def pg_create_request(keybox_id: int, first: str, last: str, company: str, email
     email = norm_email(email)
     phone = norm_phone(phone)
 
-    # insert + return (version compatible sans RETURNING si tu veux)
     row = q1(
         """
         insert into requests
@@ -475,6 +474,35 @@ def pg_create_request(keybox_id: int, first: str, last: str, company: str, email
         values
           (%s,%s,%s,%s,%s,%s,%s,'pending', now())
         returning id
+        """,
+        (g.tenant_id, keybox_id, first, last, company, email, phone),
+    )
+    return row or {"id": None}
+
+def pg_find_pending_request(keybox_id: int, email: str, phone: str):
+    if not g.get("tenant_id"):
+        return None
+
+    email = norm_email(email)
+    phone = norm_phone(phone)
+
+    return q1(
+        """
+        select *
+        from requests
+        where tenant_id=%s
+          and keybox_id=%s
+          and status='pending'
+          and (
+            (%s <> '' and email=%s)
+            or
+            (%s <> '' and phone=%s)
+          )
+        order by id desc
+        limit 1
+        """,
+        (g.tenant_id, keybox_id, email, email, phone, phone),
+    )
 
 
 def pg_is_user_allowed(qrid: str, email: str, phone: str):
@@ -1519,6 +1547,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
