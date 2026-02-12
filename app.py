@@ -848,7 +848,7 @@ def tech_access(qr_id):
     email = norm_email(request.form.get("email") or "")
     phone = norm_phone(request.form.get("phone") or "")
 
-    # limite uniquement sur soumission "humaine" (optionnel mais conseillé)
+    # rate limit uniquement sur soumission humaine (pas autoform)
     is_auto = (request.form.get("auto") == "1")
     if (not is_auto) and (not rate_limit(f"{qr_id}:{ip}", max_req=5, window_sec=600)):
         return render_template_string(
@@ -860,10 +860,11 @@ def tech_access(qr_id):
 
     allowed, reason, _user = pg_is_user_allowed(qr_id, email=email, phone=phone)
 
-    # --- PAS AUTORISÉ => pending / denied ---
+    # --- SI PAS AUTORISÉ : STOP ICI ---
     if not allowed:
         detail = reason or "Accès refusé."
 
+        # pending uniquement pour ces cas
         if reason in ("Utilisateur non enregistré.", "Aucune permission active.", "Utilisateur non approuvé."):
             try:
                 existing = pg_find_pending_request(kb["id"], email, phone)
@@ -889,7 +890,7 @@ def tech_access(qr_id):
             detail=detail,
         )
 
-    # --- AUTORISÉ => on génère et on affiche le code ---
+    # --- AUTORISÉ SEULEMENT : on génère le code ---
     with _get_lock(qr_id):
         pin, pin_id, s, e, err = ensure_active_or_next_pin(kb)
 
@@ -1765,6 +1766,12 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
+
+
+
+
+
 
 
 
