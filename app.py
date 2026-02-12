@@ -915,10 +915,15 @@ def login():
 
         if pwd == row["gerance_password"]:
             session["role"] = "gerance"
-            session["tenant_slug"] = g.tenant_slug or (request.args.get("tenant") or "").lower()
-            return redirect(url_for("gerance_portal", tenant=session["tenant_slug"]))
+            session["tenant_slug"] = g.tenant_slug
 
-        return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
+            if not session["tenant_slug"]:
+                return render_template_string(HTML_LOGIN, error="Tenant invalide")
+
+    return redirect(url_for("gerance_portal", tenant=session["tenant_slug"]))
+
+
+    return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
 
     return render_template_string(HTML_LOGIN)
 
@@ -964,7 +969,13 @@ def gerance_portal():
             "Err": "",
         })
 
-    return render_template_string(HTML_GERANCE, rows=rows, csrf=csrf_input(), tenant=g.tenant_slug)
+    return render_template_string(
+        HTML_GERANCE,
+        rows=rows,
+        csrf=csrf_input(),
+        tenant=(g.tenant_slug or session.get("tenant_slug") or "")
+    )
+
 
 
 @app.route("/api/emergency/<qr_id>")
@@ -1754,16 +1765,6 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
-
-
-
-
-
-
-
-
-
-
 
 
 
