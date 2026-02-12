@@ -916,7 +916,7 @@ def login():
         if pwd == row["gerance_password"]:
             session["role"] = "gerance"
             session["tenant_slug"] = g.tenant_slug or (request.args.get("tenant") or "").lower()
-            return redirect(url_for("gerance_portal", tenant=g.tenant_slug))
+            return redirect(url_for("gerance_portal", tenant=session["tenant_slug"]))
 
         return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
 
@@ -964,7 +964,7 @@ def gerance_portal():
             "Err": "",
         })
 
-    return render_template_string(HTML_GERANCE, rows=rows, csrf=csrf_input())
+    return render_template_string(HTML_GERANCE, rows=rows, csrf=csrf_input(), tenant=g.tenant_slug)
 
 
 @app.route("/api/emergency/<qr_id>")
@@ -1199,7 +1199,16 @@ def gerance_requests():
             }
         })
 
-    return render_template_string(HTML_REQUESTS, reqs=reqs, client=session.get("client"), csrf=csrf_input(), tenant=g.tenant_slug)
+    return render_template_string(
+        HTML_KEYBOX,
+        qr_id=qr_id,
+        batiment=bat,
+        emergency=emergency,
+        perms=perm_rows,
+        csrf=csrf_input(),
+        tenant=g.tenant_slug
+    )
+
 
 @app.route("/api/request_status/<qr_id>")
 def api_request_status(qr_id):
@@ -1210,9 +1219,11 @@ def api_request_status(qr_id):
     if allowed:
         return jsonify({"status": "approved"})
 
-    pending = find_pending_request(qr_id, email, phone)
-    if pending:
-        return jsonify({"status": "pending"})
+    kb = get_keybox_by_qr(qr_id)
+    if kb:
+        pending = pg_find_pending_request(kb["id"], email, phone)
+        if pending:
+            return jsonify({"status": "pending"})
 
     return jsonify({"status": "denied", "reason": reason})
 
@@ -1331,7 +1342,7 @@ def gerance_logs():
             "PinId": r.get("pin_id") or "",
         }})
 
-    return render_template_string(HTML_LOGS, logs=fake, client=g.tenant_slug)
+    return render_template_string(HTML_LOGS, logs=fake, client=g.tenant_slug, tenant=g.tenant_slug)
 
 
 @app.after_request
@@ -1396,17 +1407,17 @@ HTML_GERANCE = """
           {% if r.Err %}<div style="color:#ef4444;">{{r.Err}}</div>{% endif %}
         </td>
         <td style="padding:10px;">
-          <a href="/gerance/keybox/{{r.QRID}}" style="text-decoration:none;">
+          <a href="/gerance/keybox/{{r.QRID}}?tenant={{tenant}}" style="text-decoration:none;">
             <button style="padding:8px 10px;border:0;border-radius:10px;background:#2563eb;color:white;font-weight:700;cursor:pointer;">
               Gérer utilisateurs
             </button>
           </a>
-          <a href="/gerance/requests" style="text-decoration:none;">
+          <a href="/gerance/requests?tenant={{tenant}}" style="text-decoration:none;">
   <button style="padding:10px 12px;border:0;border-radius:10px;background:#111827;color:white;font-weight:800;cursor:pointer;">
     Demandes en attente
   </button>
 </a>
-        <a href="/gerance/logs" style="text-decoration:none;">
+        <a href="/gerance/logs?tenant={{tenant}}" style="text-decoration:none;">
   <button style="padding:10px 12px;border:0;border-radius:10px;background:#334155;color:white;font-weight:800;cursor:pointer;">
     Logs d'accès
   </button>
@@ -1436,13 +1447,13 @@ HTML_GERANCE = """
 HTML_KEYBOX = """
 <body style="font-family:sans-serif;background:#f4f7f9;padding:20px;">
   <div style="max-width:900px;margin:auto;background:white;padding:24px;border-radius:20px;box-shadow:0 10px 25px rgba(0,0,0,0.1);">
-    <form method="pos<a href="/gerance?tenant={{request.args.get('tenant','')}}" style="text-decoration:none;color:#2563eb;">← Retour</a>t" action="/gerance/requests/{{r['id']}}/deny?tenant={{request.args.get('tenant','')}}">
+    <a href="/gerance?tenant={{tenant}}" style="text-decoration:none;color:#2563eb;">← Retour</a>
     <h2 style="color:#2563eb;margin-top:10px;">{{batiment}} — Gestion</h2>
 
     <h3>Code d’urgence</h3>
     <form method="post" action="/gerance/keybox/{{qr_id}}/set_emergency" style="display:flex;gap:10px;align-items:center;">
        {{csrf|safe}} 
-      <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
+      <input type="hidden" name="tenant" value="{{tenant}}">
       <input name="code" value="{{emergency}}" placeholder="EmergencyCode" style="flex:1;padding:10px;border-radius:10px;border:1px solid #ddd;">
       <button style="padding:10px 14px;border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:700;cursor:pointer;">Enregistrer</button>
     </form>
@@ -1451,7 +1462,7 @@ HTML_KEYBOX = """
     <h3>Ajouter un utilisateur autorisé</h3>
     <form method="post" action="/gerance/keybox/{{qr_id}}/add_user" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         {{csrf|safe}}
-      <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
+      <input type="hidden" name="tenant" value="{{tenant}}">
       <input name="first" placeholder="Prénom" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
       <input name="last" placeholder="Nom" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
       <input name="company" placeholder="Entreprise" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
@@ -1482,7 +1493,7 @@ HTML_KEYBOX = """
         <td style="padding:10px;">
           <form method="post" action="/gerance/perm/{{p.perm_id}}/toggle">
             {{csrf|safe}}
-            <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
+            <input type="hidden" name="tenant" value="{{tenant}}">
             <input type="hidden" name="back" value="/gerance/keybox/{{qr_id}}">
             <select name="active" onchange="this.form.submit()" style="padding:6px;border-radius:8px;">
               <option value="1" {% if p.active %}selected{% endif %}>ON</option>
@@ -1567,11 +1578,12 @@ HTML_REQUESTS = """
               <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#22c55e;color:white;font-weight:700;cursor:pointer;">Valider</button>
               </form>
-              <form method="post" action="/gerance/requests/{{r['id']}}/approve?tenant={{tenant}}">
+              <form method="post" action="/gerance/requests/{{r['id']}}/deny?tenant={{tenant}}">
               {{csrf|safe}}
-              <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
+              <input type="hidden" name="tenant" value="{{tenant}}">
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#ef4444;color:white;font-weight:700;cursor:pointer;">Refuser</button>
               </form>
+
             </td>
           </tr>
         {% endfor %}
@@ -1742,6 +1754,22 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
