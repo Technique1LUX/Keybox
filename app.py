@@ -916,7 +916,7 @@ def login():
         if pwd == row["gerance_password"]:
             session["role"] = "gerance"
             session["tenant_slug"] = g.tenant_slug or (request.args.get("tenant") or "").lower()
-            return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
+            return redirect(url_for("gerance_portal", tenant=g.tenant_slug))
 
         return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
 
@@ -1742,6 +1742,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
