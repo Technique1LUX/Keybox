@@ -69,18 +69,18 @@ def tenant_from_host():
 
 
 def tenant_from_request():
-    # 1) param ?tenant=demo
+    # 1) param ?tenant=demo (prioritaire)
     t = (request.args.get("tenant") or "").strip().lower()
     if t:
         return t
 
-    # ✅ 1bis) si POST: on accepte tenant dans le form
+    # 2) si POST: accepte tenant dans le form
     if request.method == "POST":
         t = (request.form.get("tenant") or "").strip().lower()
         if t:
             return t
 
-    # 2) sous-domaine
+    # 3) sous-domaine demo.domaine.tld
     host = (request.headers.get("X-Forwarded-Host") or request.host or "").split(":")[0]
     parts = host.split(".")
     if len(parts) >= 3:
@@ -88,12 +88,13 @@ def tenant_from_request():
         if sub not in ("www", "app"):
             return sub
 
-    # ✅ 3) fallback session (gérance)
+    # 4) fallback session (gérance)
     t = (session.get("tenant_slug") or "").strip().lower()
     if t:
         return t
 
     return ""
+
 
 
 @app.before_request
@@ -914,7 +915,7 @@ def login():
 
         if pwd == row["gerance_password"]:
             session["role"] = "gerance"
-            session["tenant_slug"] = g.tenant_slug
+            session["tenant_slug"] = g.tenant_slug or (request.args.get("tenant") or "").lower()
             return redirect(url_for("gerance_requests", tenant=g.tenant_slug))
 
         return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
@@ -1441,6 +1442,7 @@ HTML_KEYBOX = """
     <h3>Code d’urgence</h3>
     <form method="post" action="/gerance/keybox/{{qr_id}}/set_emergency" style="display:flex;gap:10px;align-items:center;">
        {{csrf|safe}} 
+      <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
       <input name="code" value="{{emergency}}" placeholder="EmergencyCode" style="flex:1;padding:10px;border-radius:10px;border:1px solid #ddd;">
       <button style="padding:10px 14px;border:0;border-radius:10px;background:#0ea5e9;color:white;font-weight:700;cursor:pointer;">Enregistrer</button>
     </form>
@@ -1449,6 +1451,7 @@ HTML_KEYBOX = """
     <h3>Ajouter un utilisateur autorisé</h3>
     <form method="post" action="/gerance/keybox/{{qr_id}}/add_user" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
         {{csrf|safe}}
+      <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
       <input name="first" placeholder="Prénom" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
       <input name="last" placeholder="Nom" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
       <input name="company" placeholder="Entreprise" required style="padding:10px;border-radius:10px;border:1px solid #ddd;">
@@ -1479,6 +1482,7 @@ HTML_KEYBOX = """
         <td style="padding:10px;">
           <form method="post" action="/gerance/perm/{{p.perm_id}}/toggle">
             {{csrf|safe}}
+            <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
             <input type="hidden" name="back" value="/gerance/keybox/{{qr_id}}">
             <select name="active" onchange="this.form.submit()" style="padding:6px;border-radius:8px;">
               <option value="1" {% if p.active %}selected{% endif %}>ON</option>
@@ -1560,11 +1564,12 @@ HTML_REQUESTS = """
             <td style="padding:10px;display:flex;gap:8px;">
               <form method="post" action="/gerance/requests/{{r['id']}}/approve?tenant={{request.args.get('tenant','')}}">
               {{csrf|safe}}
+              <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#22c55e;color:white;font-weight:700;cursor:pointer;">Valider</button>
               </form>
               <form method="post" action="/gerance/requests/{{r['id']}}/approve?tenant={{tenant}}">
-
               {{csrf|safe}}
+              <input type="hidden" name="tenant" value="{{request.args.get('tenant','')}}">
                 <button style="padding:8px 10px;border:0;border-radius:10px;background:#ef4444;color:white;font-weight:700;cursor:pointer;">Refuser</button>
               </form>
             </td>
@@ -1737,6 +1742,7 @@ HTML_LOGS = """
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
+
 
 
 
